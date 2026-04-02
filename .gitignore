@@ -1,4 +1,6 @@
 **/__pycache__
 outputs/
+.venv_hf/
 
 .DS_Store
+INTERNAL_*

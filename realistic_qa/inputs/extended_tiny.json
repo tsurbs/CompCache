@@ -1,0 +1,20 @@
+[
+  {
+    "question": "Is passage A about a short test?",
+    "answers": ["Yes"],
+    "ctxs": [
+      {"title": "", "text": "Passage alpha describes a short test of retrieval."},
+      {"title": "", "text": "Passage beta mentions unrelated weather in Oslo."}
+    ],
+    "_meta": {"source": "tiny", "variant": "original"}
+  },
+  {
+    "question": "Does passage B mention Oslo?",
+    "answers": ["Yes"],
+    "ctxs": [
+      {"title": "", "text": "Passage beta mentions unrelated weather in Oslo."},
+      {"title": "", "text": "Passage gamma discusses machine learning caching."}
+    ],
+    "_meta": {"source": "tiny", "variant": "original"}
+  }
+]

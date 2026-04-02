@@ -1,0 +1,556 @@
+{
+  "alpha": 0.5070526551132463,
+  "r_squared": 0.8825916037135833,
+  "n_queries": 200,
+  "n_unique_docs": 195,
+  "n_unique_pairs": 249,
+  "top_pairs": [
+    [
+      [
+        "Is Sam Bankman-Fried a bad \u2018man\u2019 or a good \u2018boy\u2019? Lawyers swap opening statements before first witnesses take the stand",
+        "Sam Altman backs teens\u2019 startup, Google unveils the Pixel 8 and TikTok tests an ad-free tier"
+      ],
+      11
+    ],
+    [
+      [
+        "SBF\u2019s trial starts soon, but how did he \u2014 and FTX \u2014 get here?",
+        "Sam Altman backs teens\u2019 startup, Google unveils the Pixel 8 and TikTok tests an ad-free tier"
+      ],
+      10
+    ],
+    [
+      [
+        "5 things we learned so far about the Google antitrust case",
+        "News publisher files class action antitrust suit against Google, citing AI\u2019s harms to their bottom line"
+      ],
+      8
+    ],
+    [
+      [
+        "Apple defends Google Search deal in court: \u2018There wasn\u2019t a valid alternative\u2019",
+        "News publisher files class action antitrust suit against Google, citing AI\u2019s harms to their bottom line"
+      ],
+      8
+    ],
+    [
+      [
+        "Early impressions of Google\u2019s Gemini aren\u2019t great",
+        "News publisher files class action antitrust suit against Google, citing AI\u2019s harms to their bottom line"
+      ],
+      7
+    ],
+    [
+      [
+        "SBF, riding high on FTX, reportedly offered $5B to Trump to cancel President re-run",
+        "Sam Altman backs teens\u2019 startup, Google unveils the Pixel 8 and TikTok tests an ad-free tier"
+      ],
+      7
+    ],
+    [
+      [
+        "Is Google Search better than the rest? And is that fair?",
+        "News publisher files class action antitrust suit against Google, citing AI\u2019s harms to their bottom line"
+      ],
+      6
+    ],
+    [
+      [
+        "OpenAI's ex-chairman accuses board of going rogue in firing Altman: 'Sam and I are shocked and saddened by what the board did'",
+        "WTF is going on at OpenAI? We have theories"
+      ],
+      5
+    ],
+    [
+      [
+        "2023 Kentucky online sports betting sites: Best legal sportsbooks, promos, bonuses, mobile apps, how to bet",
+        "Vermont Sportsbook Promos and Sports Betting Launch News"
+      ],
+      5
+    ],
+    [
+      [
+        "News publisher files class action antitrust suit against Google, citing AI\u2019s harms to their bottom line",
+        "The people who ruined the internet"
+      ],
+      5
+    ],
+    [
+      [
+        "Sam Altman backs teens\u2019 startup, Google unveils the Pixel 8 and TikTok tests an ad-free tier",
+        "Sex, Signal messages, and sabotaging FTX's code: SBF execs and Bahamas roommates tell all in court"
+      ],
+      5
+    ],
+    [
+      [
+        "Donald Trump defrauded banks with 'fantasy' to build his real estate empire, judge rules in a major repudiation against the former president",
+        "The $777 million surprise: Donald Trump is getting richer"
+      ],
+      4
+    ],
+    [
+      [
+        "News publisher files class action antitrust suit against Google, citing AI\u2019s harms to their bottom line",
+        "What to know about Fortnite maker Epic Games\u2019 antitrust battle with Google, starting today"
+      ],
+      4
+    ],
+    [
+      [
+        "Is Sam Bankman-Fried a bad \u2018man\u2019 or a good \u2018boy\u2019? Lawyers swap opening statements before first witnesses take the stand",
+        "SBF\u2019s trial starts soon, but how did he \u2014 and FTX \u2014 get here?"
+      ],
+      4
+    ],
+    [
+      [
+        "SBF, riding high on FTX, reportedly offered $5B to Trump to cancel President re-run",
+        "SBF\u2019s trial starts soon, but how did he \u2014 and FTX \u2014 get here?"
+      ],
+      4
+    ],
+    [
+      [
+        "In the end, the FTX trial was about the friends screwed along the way",
+        "Sam Altman backs teens\u2019 startup, Google unveils the Pixel 8 and TikTok tests an ad-free tier"
+      ],
+      4
+    ],
+    [
+      [
+        "Sam Altman backs teens\u2019 startup, Google unveils the Pixel 8 and TikTok tests an ad-free tier",
+        "Sam Bankman-Fried was a terrible boyfriend"
+      ],
+      4
+    ],
+    [
+      [
+        "5 things we learned so far about the Google antitrust case",
+        "Apple defends Google Search deal in court: \u2018There wasn\u2019t a valid alternative\u2019"
+      ],
+      3
+    ],
+    [
+      [
+        "Epic v. Google, explained",
+        "News publisher files class action antitrust suit against Google, citing AI\u2019s harms to their bottom line"
+      ],
+      3
+    ],
+    [
+      [
+        "Steam Deck OLED review: It's just better",
+        "The Steam Deck OLED improves much more than its screen"
+      ],
+      3
+    ],
+    [
+      [
+        "Google fakes an AI demo, Grand Theft Auto VI goes viral and Spotify cuts jobs",
+        "News publisher files class action antitrust suit against Google, citing AI\u2019s harms to their bottom line"
+      ],
+      3
+    ],
+    [
+      [
+        "Fantasy Football Week 16 Wide Receiver Preview: Waiver adds, DFS plays, and more",
+        "NFL awards odds: Six longshots bettors should consider for MVP, OPOY, DPOY and more"
+      ],
+      3
+    ],
+    [
+      [
+        "Is Sam Bankman-Fried a bad \u2018man\u2019 or a good \u2018boy\u2019? Lawyers swap opening statements before first witnesses take the stand",
+        "Sex, Signal messages, and sabotaging FTX's code: SBF execs and Bahamas roommates tell all in court"
+      ],
+      3
+    ],
+    [
+      [
+        "Apple defends Google Search deal in court: \u2018There wasn\u2019t a valid alternative\u2019",
+        "Tim Sweeney on Epic\u2019s victory royale over Google"
+      ],
+      3
+    ],
+    [
+      [
+        "News publisher files class action antitrust suit against Google, citing AI\u2019s harms to their bottom line",
+        "Tim Sweeney on Epic\u2019s victory royale over Google"
+      ],
+      3
+    ],
+    [
+      [
+        "Sam Altman backs teens\u2019 startup, Google unveils the Pixel 8 and TikTok tests an ad-free tier",
+        "The jury finally hears from Sam Bankman-Fried"
+      ],
+      3
+    ],
+    [
+      [
+        "Line Shopping in Sports Betting - How to Find the Best Odds",
+        "NBA Rookie of the Year Odds - Wembanyama the early favorite"
+      ],
+      3
+    ],
+    [
+      [
+        "ASX set to open lower as Wall Street closes September with more losses",
+        "ASX to rise after interest rate hopes boost US shares"
+      ],
+      3
+    ],
+    [
+      [
+        "Taylor Swift is Time\u2019s Person of the Year",
+        "Travis Kelce faces backlash after comments about \u2018finding a breeder\u2019 resurface amid Taylor Swift romance"
+      ],
+      3
+    ],
+    [
+      [
+        "Sam Altman backs teens\u2019 startup, Google unveils the Pixel 8 and TikTok tests an ad-free tier",
+        "Sam Bankman-Fried didn\u2019t ask where the $8 billion went"
+      ],
+      3
+    ],
+    [
+      [
+        "Sam Altman backs teens\u2019 startup, Google unveils the Pixel 8 and TikTok tests an ad-free tier",
+        "The FTX trial is bigger than Sam Bankman-Fried"
+      ],
+      2
+    ],
+    [
+      [
+        "2023 Kentucky online sports betting sites: Best legal sportsbooks, promos, bonuses, mobile apps, how to bet",
+        "NBA Rookie of the Year Odds - Wembanyama the early favorite"
+      ],
+      2
+    ],
+    [
+      [
+        "NBA Rookie of the Year Odds - Wembanyama the early favorite",
+        "Vermont Sportsbook Promos and Sports Betting Launch News"
+      ],
+      2
+    ],
+    [
+      [
+        "ChatGPT: Everything you need to know about the AI-powered chatbot",
+        "One year later, ChatGPT is still alive and kicking"
+      ],
+      2
+    ],
+    [
+      [
+        "78 Absolute Best October Prime Day Deals (2023)",
+        "Amazon sellers sound off on the FTC's 'long-overdue' antitrust case"
+      ],
+      2
+    ],
+    [
+      [
+        "ASX set to drop as Wall Street\u2019s September slump deepens",
+        "Amazon sellers sound off on the FTC's 'long-overdue' antitrust case"
+      ],
+      2
+    ],
+    [
+      [
+        "ASX set to drop as Wall Street\u2019s September slump deepens",
+        "Here are the best Kindle deals right now"
+      ],
+      2
+    ],
+    [
+      [
+        "Amazon sellers sound off on the FTC's 'long-overdue' antitrust case",
+        "Here are the best Kindle deals right now"
+      ],
+      2
+    ],
+    [
+      [
+        "Taylor Swift is Time\u2019s Person of the Year",
+        "Taylor Swift-Travis Kelce timeline: Everything to know about rumored romance between pop star, Chiefs TE"
+      ],
+      2
+    ],
+    [
+      [
+        "Taylor Swift is Time\u2019s Person of the Year",
+        "Travis Kelce says he tried to delete his \u2018nonsense\u2019 tweets before they went viral"
+      ],
+      2
+    ],
+    [
+      [
+        "2023 Kentucky online sports betting sites: Best legal sportsbooks, promos, bonuses, mobile apps, how to bet",
+        "MLB Betting Sites & Apps - The Best Baseball Sportsbooks 2023"
+      ],
+      2
+    ],
+    [
+      [
+        "MLB Betting Sites & Apps - The Best Baseball Sportsbooks 2023",
+        "Vermont Sportsbook Promos and Sports Betting Launch News"
+      ],
+      2
+    ],
+    [
+      [
+        "Is Sam Bankman-Fried a bad \u2018man\u2019 or a good \u2018boy\u2019? Lawyers swap opening statements before first witnesses take the stand",
+        "The jury finally hears from Sam Bankman-Fried"
+      ],
+      2
+    ],
+    [
+      [
+        "How ego and fear fuelled the rise of artificial intelligence",
+        "OpenAI's ex-chairman accuses board of going rogue in firing Altman: 'Sam and I are shocked and saddened by what the board did'"
+      ],
+      2
+    ],
+    [
+      [
+        "More from the US v Google trial: vertical search, pre-installs and the case of Firefox/Yahoo",
+        "News publisher files class action antitrust suit against Google, citing AI\u2019s harms to their bottom line"
+      ],
+      2
+    ],
+    [
+      [
+        "Early impressions of Google\u2019s Gemini aren\u2019t great",
+        "What to know about Fortnite maker Epic Games\u2019 antitrust battle with Google, starting today"
+      ],
+      2
+    ],
+    [
+      [
+        "Fantasy Football WR PPR Rankings Week 14: Who to start, best sleepers at wide receiver",
+        "NFL awards odds: Six longshots bettors should consider for MVP, OPOY, DPOY and more"
+      ],
+      2
+    ],
+    [
+      [
+        "Tim Sweeney on Epic\u2019s victory royale over Google",
+        "What we expect at Apple's Scary Fast event: M3-powered MacBook Pros and new iMacs"
+      ],
+      2
+    ],
+    [
+      [
+        "Is Sam Bankman-Fried a bad \u2018man\u2019 or a good \u2018boy\u2019? Lawyers swap opening statements before first witnesses take the stand",
+        "SBF, riding high on FTX, reportedly offered $5B to Trump to cancel President re-run"
+      ],
+      2
+    ],
+    [
+      [
+        "SBF\u2019s trial starts soon, but how did he \u2014 and FTX \u2014 get here?",
+        "Sex, Signal messages, and sabotaging FTX's code: SBF execs and Bahamas roommates tell all in court"
+      ],
+      2
+    ]
+  ],
+  "doc_frequencies": {
+    "News publisher files class action antitrust suit against Google, citing AI\u2019s harms to their bottom line": 28,
+    "Sam Altman backs teens\u2019 startup, Google unveils the Pixel 8 and TikTok tests an ad-free tier": 27,
+    "Is Sam Bankman-Fried a bad \u2018man\u2019 or a good \u2018boy\u2019? Lawyers swap opening statements before first witnesses take the stand": 14,
+    "SBF\u2019s trial starts soon, but how did he \u2014 and FTX \u2014 get here?": 11,
+    "OpenAI's ex-chairman accuses board of going rogue in firing Altman: 'Sam and I are shocked and saddened by what the board did'": 11,
+    "Apple defends Google Search deal in court: \u2018There wasn\u2019t a valid alternative\u2019": 10,
+    "5 things we learned so far about the Google antitrust case": 9,
+    "Early impressions of Google\u2019s Gemini aren\u2019t great": 8,
+    "SBF, riding high on FTX, reportedly offered $5B to Trump to cancel President re-run": 8,
+    "WTF is going on at OpenAI? We have theories": 7,
+    "NBA Rookie of the Year Odds - Wembanyama the early favorite": 7,
+    "Donald Trump defrauded banks with 'fantasy' to build his real estate empire, judge rules in a major repudiation against the former president": 6,
+    "Is Google Search better than the rest? And is that fair?": 6,
+    "Tim Sweeney on Epic\u2019s victory royale over Google": 6,
+    "2023 Kentucky online sports betting sites: Best legal sportsbooks, promos, bonuses, mobile apps, how to bet": 5,
+    "Vermont Sportsbook Promos and Sports Betting Launch News": 5,
+    "NFL power rankings: Lions, 49ers level up; Texans jump Bengals, Bills; Jets, Patriots sink to bottom for Week 11": 5,
+    "The people who ruined the internet": 5,
+    "Taylor Swift is Time\u2019s Person of the Year": 5,
+    "Sex, Signal messages, and sabotaging FTX's code: SBF execs and Bahamas roommates tell all in court": 5,
+    "ASX to rise after interest rate hopes boost US shares": 5,
+    "The $777 million surprise: Donald Trump is getting richer": 4,
+    "ChatGPT: Everything you need to know about the AI-powered chatbot": 4,
+    "The jury finally hears from Sam Bankman-Fried": 4,
+    "What to know about Fortnite maker Epic Games\u2019 antitrust battle with Google, starting today": 4,
+    "Fantasy Football Week 16 Wide Receiver Preview: Waiver adds, DFS plays, and more": 4,
+    "NFL awards odds: Six longshots bettors should consider for MVP, OPOY, DPOY and more": 4,
+    "Bears vs. Vikings live score, updates, highlights from NFL 'Monday Night Football' game": 4,
+    "ASX set to open lower as Wall Street closes September with more losses": 4,
+    "In the end, the FTX trial was about the friends screwed along the way": 4,
+    "Sam Bankman-Fried was a terrible boyfriend": 4,
+    "ASX set for bright start despite Wall Street slip; $A drops": 4,
+    "The FTX trial is bigger than Sam Bankman-Fried": 3,
+    "Amazon sellers sound off on the FTC's 'long-overdue' antitrust case": 3,
+    "Epic v. Google, explained": 3,
+    "The Steam Deck OLED improves much more than its screen": 3,
+    "Steam Deck OLED review: It's just better": 3,
+    "Uber sexual assault survivors call for in-car cameras, tech upgrades": 3,
+    "Google fakes an AI demo, Grand Theft Auto VI goes viral and Spotify cuts jobs": 3,
+    "MLB Betting Sites & Apps - The Best Baseball Sportsbooks 2023": 3,
+    "How ego and fear fuelled the rise of artificial intelligence": 3,
+    "More from the US v Google trial: vertical search, pre-installs and the case of Firefox/Yahoo": 3,
+    "He\u2019s Hockey\u2019s Brightest Young Star. This Is What Makes His Shot So Special.": 3,
+    "SBF Trial: The latest updates from the FTX collapse\u2019s courtroom drama": 3,
+    "Line Shopping in Sports Betting - How to Find the Best Odds": 3,
+    "Travis Kelce faces backlash after comments about \u2018finding a breeder\u2019 resurface amid Taylor Swift romance": 3,
+    "Sam Bankman-Fried didn\u2019t ask where the $8 billion went": 3,
+    "The Epic v. Google trial may come down to simple v. complicated": 3,
+    "One year later, ChatGPT is still alive and kicking": 2,
+    "European consumer groups band together to fight Meta\u2019s self-serving ad-free sub \u2014 branding it \u2018unfair\u2019 and \u2018illegal\u2019": 2,
+    "ASX set to drop as Wall Street\u2019s September slump deepens": 2,
+    "78 Absolute Best October Prime Day Deals (2023)": 2,
+    "Here are the best Kindle deals right now": 2,
+    "Cowboys vs. 49ers live score, updates, highlights from NFL 'Sunday Night Football' game": 2,
+    "Best sportsbook bonus offers for NFL Monday Night Football Eagles vs. Seahawks: Claim over $5,000 in bonuses from Bet365, BetMGM, BetRivers, Caesars Sportsbook, DraftKings and FanDuel\u00a0": 2,
+    "FanDuel 'Prop Stars' Picks: Best bets for Travis Kelce & Taylor Swift-inspired props for Chiefs-Jets Week 4": 2,
+    "The Steam Deck OLED arrives November 16 with an improved screen and longer battery life": 2,
+    "Jada Pinkett Smith reveals why she and Will Smith never signed a prenup": 2,
+    "Travis Kelce says he tried to delete his \u2018nonsense\u2019 tweets before they went viral": 2,
+    "Taylor Swift-Travis Kelce timeline: Everything to know about rumored romance between pop star, Chiefs TE": 2,
+    "Amazon brings conversational AI to kids with launch of \u2018Explore with Alexa\u2019": 2,
+    "Buckle up for more \u2018turbulence\u2019 in the housing market, BofA says\u2014it\u2019s a housing recession, 1980s style": 2,
+    "\u2018It happens\u2019: All Blacks defend star centre after spray as Cheika heaps pressure on \u2018favourites\u2019 New Zealand": 2,
+    "A timeline of Sam Altman\u2019s firing from OpenAI \u2014 and the fallout": 2,
+    "NFL standings: Updated AFC, NFC playoff picture for Week 13 of 2023 season": 2,
+    "Fantasy Football WR PPR Rankings Week 14: Who to start, best sleepers at wide receiver": 2,
+    "What we expect at Apple's Scary Fast event: M3-powered MacBook Pros and new iMacs": 2,
+    "Inter Miami vs FC Cincinnati live score, result, updates, highlights with Lionel Messi's MLS playoffs on line": 2,
+    "Meta has a moderation bias problem, not just a \u2018bug,\u2019 that\u2019s suppressing Palestinian voices": 2,
+    "8 predictions for AI in 2024": 2,
+    "Creatives across industries are strategizing together around AI concerns": 2,
+    "NFL Fantasy Football Week 5 Lineup Decisions: Starts, Sits, Sleepers, Busts to know for every game": 2,
+    "\u2018Latin artists have been paving the way for deals that offer more control, transparency, and better economics.\u2019": 2,
+    "Young Taylor Swift fans go viral for struggling to open the star's CD: 'Making me laugh'": 2,
+    "Moneyline Betting - What is the Moneyline and How Does it Work?": 2,
+    "The restaurant nearest Google": 2,
+    "Taylor Swift reveals secret start to her relationship with Travis Kelce": 2,
+    "Sleepy tea, counting backwards and dense earplugs: Inside the lives of insomniacs": 2,
+    "ASX set to open higher as Wall Street rebounds; $A rises": 2,
+    "&#039;Massive intel failure by Mossad&#039;: Hamas&#039; surprise attack on Israel shocks internet": 2,
+    "IND vs AUS Head-to-Head Record in ODI World Cup: Check India vs Australia match stats in World Cup Finals and ODI series": 2,
+    "Israel's blockade of Gaza means that a region the size of Philadelphia faces a real risk of starvation, says Peace Studies scholar": 2,
+    "Here\u2019s how Rainforest, a budding Stripe rival, aims to win over software companies": 1,
+    "How the conspiracy-fueled Epoch Times went mainstream and made millions": 1,
+    "Twitch\u2019s money guy talks about the revenue split controversy and its monetization long game": 1,
+    "Beeper Mini is back in operation after Apple\u2019s attempt to shut it down": 1,
+    "Alcoholism, Ayahuasca and the Enlightenment of an N.F.L. Player": 1,
+    "How the OpenAI fiasco could bolster Meta and the \u2018open AI\u2019 movement": 1,
+    "\u2018Biggest win of my career\u2019: De Minaur, Popyrin power Australia into Davis Cup final": 1,
+    "Where to watch England vs South Africa: Live stream, TV channel, lineups, odds for 2023 Rugby World Cup semifinal": 1,
+    "Cruise hits the brakes on driverless, UAW makes progress and more EV backpedaling": 1,
+    "The Crown: What is fact and what is fiction on season 6?": 1,
+    "Fans react to most \u2018heartbreaking\u2019 scene in The Crown": 1,
+    "Amazon\u2019s iRobot purchase sucks up formal competition concerns in EU": 1,
+    "EU says incoming rules for general purpose AIs can evolve over time": 1,
+    "Elon Musk\u2019s X faces first DSA probe in EU over illegal content risks, moderation, transparency and deceptive UX design": 1,
+    "Watch great noir this Noirvember": 1,
+    "Jada Pinkett Smith and Will Smith have been separated since 2016 - when should couples just get divorced?": 1,
+    "\u2018Mass breach of privacy\u2019: TikTok under fire for tracking users online": 1,
+    "Nike misses revenue expectations for the first time in two years, beats on earnings and gross margin": 1,
+    "7 of the best ski holidays in Canada": 1,
+    "7 of the best luxury ski resorts for a five-star experience": 1,
+    "Here are the best deals on headphones and wireless earbuds we could find": 1,
+    "The 30 best Amazon Prime Day deals for October 2023": 1,
+    "Why Mozilla is betting on a decentralized social networking future": 1,
+    "Sam Altman ousted as OpenAI\u2019s CEO": 1,
+    "Uber\u2019s Q3 numbers include impressive profitability gains, slower-than-expected growth": 1,
+    "Meta and IBM form an AI Alliance, but to what end?": 1,
+    "When it comes to generative AI in the enterprise, CIOs are taking it slow": 1,
+    "6 VCs explain how startups can capture and defend marketshare in the AI era": 1,
+    "Deepfake election risks trigger EU call for more generative AI safeguards": 1,
+    "Thirty-seven phases of agony define Ireland\u2019s greatest heartbreak as curse continues": 1,
+    "How is it still getting worse for Sam Bankman-Fried?": 1,
+    "The small and affordable EVs we lost in 2023": 1,
+    "Trump and the GOP are trying to drive a wedge between autoworkers and EVs": 1,
+    "The best movies of 2023 so far": 1,
+    "Mattel slammed for \u2018inaccurate\u2019 Cherokee Barbie": 1,
+    "Leaky defence \u2018isn\u2019t good enough\u2019 and \u2018scars\u2019 grow from throwing away leads \u2013 It\u2019s all going wrong for Manchester United in Europe": 1,
+    "Manchester United face Galatasaray with high hopes but bad memories": 1,
+    "Israel\u2019s startup ecosystem: down but not out": 1,
+    "A comprehensive list of 2023 tech layoffs": 1,
+    "Lions vs. Packers live score, updates, highlights from NFL 'Thursday Night Football' game": 1,
+    "Canelo Alvarez vs Jermell Charlo live fight updates, results, highlights from 2023 boxing fight": 1,
+    "\u2018As clinical as it gets\u2019: Unbeaten Aussie moves to 24-0 with stunning first-round KO of hapless Englishman": 1,
+    "Watch Argentina vs Paraguay live stream, TV channel, lineups, betting odds for World Cup qualifying match": 1,
+    "How Did the Houston Astros Cheat in 2017? Everything to Know About a Dark Moment in MLB History": 1,
+    "Meta says it\u2019s prioritizing livestreaming checks during Israel-Hamas war": 1,
+    "Prop Betting - What is a Prop Bet?": 1,
+    "The new, \u2018efficient\u2019 Spotify has a very different approach to podcasting": 1,
+    "The best Black Friday deals you can get for under $25": 1,
+    "The best Apple Cyber Monday deals of 2023: Save on AirPods, iPads, Apple Watches and more": 1,
+    "14 Best Deals: TVs, Keyboards, Mice, Chargers, and Earbuds": 1,
+    "FanDuel Picks Week 15: Best NFL DFS lineup advice for daily fantasy football tournaments": 1,
+    "Top 25 MLB offseason trade candidates": 1,
+    "Everton players and fans will be fired up by points penalty, asserts Sean Dyche": 1,
+    "Ange aghast as Spurs suffer \u2018unbelievable\u2019 West Ham turnaround \u2013 with two of the worst goals you\u2019ll see": 1,
+    "Theatre producer and Everton chairman Kenwright dies": 1,
+    "These Are Our Favorite Walmart Cyber Monday Deals": 1,
+    "Potential Conor McGregor Fight Could Help Canelo Alvarez Come a Step Closer to Surpass Floyd Mayweather\u2019s Net Worth and His Billionaire Status": 1,
+    "UFC 295 predictions, best bets, odds: Tom Aspinall, Mackenzie Dern among top picks to consider": 1,
+    "Martin Scorsese\u2019s late-stage career has proved Quentin Tarantino wrong": 1,
+    "Martin Scorsese gets quizzed by his daughter on internet slang": 1,
+    "Vikings vs. Broncos live score, updates, highlights from NFL 'Sunday Night Football' game": 1,
+    "'We know far more about the deep ocean than the moon or Mars,' says explorer Jon Copley": 1,
+    "'They seemed primed to take over': How the Great Dying doomed the 'beast tooth' and set the stage for the dawn of the dinosaurs": 1,
+    "The best Sorcerer builds and skills in Diablo 4": 1,
+    "The best Barbarian builds and skills in Diablo 4": 1,
+    "Gen Z just saw the worst war in Israel in 50 years break out all over the internet, but they were raised on 'disturbing images'": 1,
+    "WebSummit derailed by founder\u2019s public fight with those supporting Israel in Hamas conflict": 1,
+    "USC basketball futures odds to win Pac-12, NCAA tourney ahead of Bronny James collegiate debut": 1,
+    "The Best NBA Betting Sites and Apps for the 2023-24 Season": 1,
+    "Fifth Third 1.67% Cash/Back Card: One of the simplest cash back credit cards with an above-average return": 1,
+    "American Express Cash Magnet\u00ae Card review: a simple, no-nonsense cash back card": 1,
+    "Meta turned a blind eye to kids on its platforms for years, unredacted lawsuit alleges": 1,
+    "Michelle Jubelirer on Ice Spice, The Beatles, and reinventing Capitol Music Group: \u2018I don\u2019t think any label group has been able to turn things around as quickly as my team and I have done in less than two years.\u2019": 1,
+    "Nobel Prize winner shocked by early morning phone call from Sweden: 'It was ringing during the night, but I didn\u2019t answer it because I\u2019m trying to get some sleep, basically'": 1,
+    "Creation of quantum dots wins 2023 chemistry Nobel": 1,
+    "N.F.L. Executives on the Biggest Questions Facing Super Bowl Contenders": 1,
+    "Amazon\u2019s Tye Brady discusses generative AI, humanoid robots and mobile manipulation": 1,
+    "The best portable chargers for your gear": 1,
+    "Fasting could reduce signs of Alzheimer\u2019s disease, studies suggest: \u2018Profound effects\u2019": 1,
+    "Today the FTX jury suffered through a code review": 1,
+    "2023 NFL Week 11 injury roundup: Rams WR Cooper Kupp, Seahawks RB Kenneth Walker III among stars to exit": 1,
+    "Fantasy Football WR PPR Rankings Week 13: Who to start, best sleepers at wide receiver": 1,
+    "Binance to pay $4.3B in fines and CEO \u2018CZ\u2019 to step down, plead guilty to anti-money laundering charges": 1,
+    "Coinbase rallies more than 60% in same month that FTX and Binance founders brace for prison": 1,
+    "NFL DFS picks Week 15: Best sleepers, value players for FanDuel, DraftKings, SuperDraft lineups": 1,
+    "NFL Fantasy Football Week 6 Lineup Decisions: Starts, Sits, Sleepers, Busts to know for every game": 1,
+    "Pochettino looks past James mistake and stakes future on his \u2018Chelsea DNA\u2019": 1,
+    "NBL Round 4: Creek pours in points as Phoenix swamp Sixers, CJ claims Kings didn\u2019t look after DJ": 1,
+    "World Series 2023 live score: Rangers vs. Diamondbacks updates, highlights, results from Game 4": 1,
+    "ASX rises after Wall Street gains on rate optimism; Oil drops": 1,
+    "The US Senate and Silicon Valley reconvene for a second AI Insight Forum": 1,
+    "Sweeping White House AI executive order takes aim at the technology's toughest challenges": 1,
+    "When do the clocks change in 2023?": 1,
+    "Christmas Day preview: 49ers, Ravens square off in potential Super Bowl sneak peek": 1,
+    "Best sports betting promo codes for college basketball: Claim $5,000+ in bonuses from Caesars Sportsbook, BetMGM, Bet365, FanDuel, DraftKings, BetRivers": 1,
+    "College Bowl Odds, Spreads, Money Lines and Totals - NCAAF 2023 Bowl Season": 1,
+    "This horror flick boasts the best opening 13 minutes of a film you\u2019ll see this year": 1,
+    "The 53 best Black Friday deals we could find at Amazon, Walmart, Target and more": 1,
+    "Point Spread Betting - What is a Point Spread Bet?": 1,
+    "Discogs\u2019 vibrant vinyl community is shattering": 1,
+    "Sen. Robert Menendez, facing bribery charges, stumps bank CEOs by asking how much their firms paid in settlements for allegedly ripping off consumers": 1,
+    "Wild fire HC Dean Evason, hire John Hynes as replacement": 1,
+    "NMPA: Generative AI is \u2018the greatest risk to the human creative class that has ever existed\u2019": 1,
+    "The best shows to stream in December": 1,
+    "After a Stunning Snub, College Football Is Facing an Identity Crisis": 1,
+    "Michigan sign-stealing scandal winners and losers, from Jim Harbaugh to Tony Petitti": 1,
+    "ICC World Cup 2023: India at Cricket World Cup semi-finals so far": 1,
+    "Ten Hag demands both positivity and pragmatism from erratic Onana": 1,
+    "Champions League permutations, scenarios: What teams need to qualify from groups for 2023/24 Round of 16 stage": 1,
+    "Israel's defense undone by reliance on technology": 1,
+    "THE GREATEST! Boks beat All Blacks in instant classic to claim record FOURTH RWC in controversial, dramatic final": 1,
+    "How OpenAI's ChatGPT has changed the world in just a year": 1,
+    "The Verge\u2019s 2023 holiday gift guide for kids": 1
+  }
+}

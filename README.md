@@ -20,13 +20,13 @@ pip install -r requirements.txt
 ## Example run
 ### Run LLM inference with CacheBlend
 ```
-python example/blend.py
+python standard_qa/runners/blend.py
 ```
 
 ## Run Musique dataset
 ### Compare LLM inference with CacheBlend and normal prefill
 ```
-python example/blend_musique.py
+python standard_qa/runners/blend_musique.py
 ```
 To run datasets other than musique, please replace `musique` with `samsum` or `wikimqa` in the above command.
 ## References

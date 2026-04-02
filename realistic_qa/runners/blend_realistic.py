@@ -1,0 +1,438 @@
+"""CacheBlend eval with FIFO reuse of independently collected chunk KVs.
+
+Expects a dataset JSON built by ``realistic_qa/scripts/build_extended_dataset.py``.
+Processing order is shuffled (default seed 34) to mimic streaming queries.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO / "standard_qa" / "runners"))
+sys.path.insert(0, str(_REPO / "realistic_qa" / "runners"))
+
+from utils import (  # noqa: E402
+    CoRetrievalTracker,
+    build_qa_prompt,
+    compute_f1,
+    get_doc_ids,
+    load_dataset,
+    save_ttft_histogram,
+)
+
+from kv_fifo_cache import FIFOChunkKVCache  # noqa: E402
+
+query_prompt = (
+    "\n\nAnswer the question directly based on the given passages."
+    " Do NOT repeat the question."
+    " The answer should be within 5 words. \nQuestion:"
+)
+
+
+def _save_ttft_warmup_plot(
+    dataset_path: str,
+    ttft_blend: list[float],
+    ttft_full: list[float],
+    *,
+    stream_seed: int,
+    skip_first: int,
+    fifo_stats: dict,
+    roll_window: int,
+) -> tuple[str, str | None]:
+    """Write per-query TTFT series (JSON) and a line plot (PNG) next to the dataset file.
+    """
+    base = Path(dataset_path).resolve()
+    json_path = base.with_name(f"{base.stem}_ttft_warmup.json")
+    png_path = base.with_name(f"{base.stem}_ttft_warmup.png")
+
+    n = len(ttft_blend)
+    payload = {
+        "query_index": list(range(n)),
+        "ttft_blend_seconds": [float(x) for x in ttft_blend],
+        "ttft_full_seconds": [float(x) for x in ttft_full],
+        "metadata": {
+            "dataset": str(base),
+            "stream_seed": stream_seed,
+            "skip_first": skip_first,
+            "fifo_kv": fifo_stats,
+            "roll_window": roll_window,
+        },
+    }
+    with open(json_path, "w") as f:
+        json.dump(payload, f, indent=2)
+
+    png_written: str | None = None
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        x = np.arange(n, dtype=float)
+        fig, ax = plt.subplots(figsize=(10, 5), layout="constrained")
+        ax.plot(x, np.asarray(ttft_blend, dtype=float) * 1e3, label="CacheBlend (FIFO KV)", lw=0.8, alpha=0.85)
+        ax.plot(x, np.asarray(ttft_full, dtype=float) * 1e3, label="Full prefill", lw=0.8, alpha=0.85)
+
+        if roll_window > 1 and n >= roll_window:
+            w = roll_window
+            k = np.ones(w, dtype=float) / w
+            smooth_b = np.convolve(ttft_blend, k, mode="valid") * 1e3
+            smooth_f = np.convolve(ttft_full, k, mode="valid") * 1e3
+            xs = np.arange(w - 1, n, dtype=float)
+            ax.plot(xs, smooth_b, label=f"CacheBlend ({w}-query rolling mean)", lw=1.5)
+            ax.plot(xs, smooth_f, label=f"Full prefill ({w}-query rolling mean)", lw=1.5)
+
+        ax.set_xlabel("Query index (shuffled stream order)")
+        ax.set_ylabel("TTFT (ms)")
+        ax.set_title("Time to first token vs cache warmup")
+        ax.legend(loc="upper right", fontsize=8)
+        ax.grid(True, alpha=0.3)
+        fig.savefig(png_path, dpi=150)
+        plt.close(fig)
+        png_written = str(png_path)
+    except ImportError:
+        pass
+
+    if png_written:
+        print(f"TTFT warmup plot: {png_written}")
+    print(f"TTFT warmup data: {json_path}")
+    return str(json_path), png_written
+
+
+def _chunk_cache_key(chunk_index: int, token_ids: list[int]) -> str:
+    if chunk_index == 0:
+        return "__instr_prefix__"
+    h = hashlib.sha256()
+    for t in token_ids:
+        h.update(t.to_bytes(4, "little", signed=False))
+    return f"ctx:{h.hexdigest()}"
+
+
+def run_blend_eval_fifo(
+    dataset_path: str,
+    prefix_prompt: str,
+    prompt_builder,
+    metric_fn,
+    metric_name: str,
+    *,
+    inst_tokens=None,
+    s_end=None,
+    suffix_is_query_len: bool = True,
+    max_ctx_len=None,
+    max_tokens: int = 32,
+    recomp_ratio=None,
+    fast_attention=None,
+    extra_metadata=None,
+    post_process=None,
+    clear_hack_kv: bool = False,
+    model_name: str = "mistralai/Mistral-7B-Instruct-v0.2",
+    gpu_memory_utilization: float = 0.5,
+    max_model_len: int | None = None,
+    num_layers: int = 32,
+    stream_seed: int = 34,
+    skip_first: int = 0,
+    fifo_max_chunks: int = 10_000,
+    shuffle_dataset: bool = True,
+):
+    import numpy as np
+    import torch
+    from itertools import chain
+    from vllm import LLM, SamplingParams
+    from transformers import AutoTokenizer
+
+    eval_dataset = load_dataset(dataset_path)
+    if shuffle_dataset:
+        rng = __import__("random").Random(stream_seed)
+        eval_dataset = list(eval_dataset)
+        rng.shuffle(eval_dataset)
+
+    if skip_first:
+        eval_dataset = eval_dataset[skip_first:]
+
+    llm_kwargs: dict = {
+        "model": model_name,
+        "gpu_memory_utilization": gpu_memory_utilization,
+    }
+    if max_model_len is not None:
+        llm_kwargs["max_model_len"] = max_model_len
+    llm = LLM(**llm_kwargs)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    llm.set_tokenizer(tokenizer)
+
+    if s_end is None:
+        s_end = []
+    if extra_metadata is None:
+        extra_metadata = {}
+
+    prefix_ids = tokenizer.encode(prefix_prompt)[1:]
+    s_start_full = list(inst_tokens) + prefix_ids if inst_tokens else prefix_ids
+    s_start_len = len(s_start_full) + 1
+
+    s_start: list = []
+    s_start_1_len = len(s_start) + 1
+
+    fifo = FIFOChunkKVCache(fifo_max_chunks)
+    tracker = CoRetrievalTracker()
+    ttft_blend = []
+    ttft_full = []
+    metric_blend = []
+    metric_full = []
+
+    model_ref = (
+        llm.llm_engine.model_executor.driver_worker
+        .model_runner.model.model
+    )
+    layers = model_ref.layers
+
+    for sample_idx, ex in enumerate(eval_dataset):
+        answers = ex["answers"]
+        doc_prompts, q_prompt = prompt_builder(ex)
+
+        doc_ids = get_doc_ids(ex)
+        tracker.record(doc_ids)
+
+        doc_chunk_ids = [tokenizer.encode(doc)[1:] for doc in doc_prompts]
+        q_ids = tokenizer.encode(q_prompt)[1:]
+
+        if max_ctx_len is not None:
+            while len(list(chain.from_iterable(doc_chunk_ids))) > max_ctx_len:
+                del_idx = int(len(doc_chunk_ids) / 2)
+                del doc_chunk_ids[del_idx]
+            if len(doc_chunk_ids) == 0:
+                continue
+
+        sampling_params = SamplingParams(temperature=0, max_tokens=1)
+
+        cache_fuse_metadata = model_ref.cache_fuse_metadata
+        cache_fuse_metadata["collect"] = False
+        cache_fuse_metadata["check"] = False
+        for k, v in extra_metadata.items():
+            cache_fuse_metadata[k] = v
+
+        doc_chunk_ids = [s_start + chunk_ids for chunk_ids in doc_chunk_ids]
+        doc_chunk_ids = [s_start_full] + doc_chunk_ids
+        doc_chunk_ids = doc_chunk_ids + [s_start + q_ids + s_end]
+
+        last_len = len(q_ids + s_end) if suffix_is_query_len else len([q_ids + s_end])
+
+        chunk_past_key_values: list = []
+
+        cache_fuse_metadata["collect"] = True
+        cache_fuse_metadata["check"] = False
+
+        for i in range(len(doc_chunk_ids)):
+            ck = _chunk_cache_key(i, doc_chunk_ids[i])
+            cached_layers = fifo.get(ck)
+
+            if cached_layers is not None:
+                for j in range(num_layers):
+                    temp_k, temp_v = cached_layers[j]
+                    if i == 0:
+                        chunk_past_key_values.append([temp_k.clone(), temp_v.clone()])
+                    else:
+                        chunk_past_key_values[j][0] = torch.cat(
+                            (chunk_past_key_values[j][0], temp_k), dim=0
+                        )
+                        chunk_past_key_values[j][1] = torch.cat(
+                            (chunk_past_key_values[j][1], temp_v), dim=0
+                        )
+                model_ref.old_kvs = chunk_past_key_values
+                continue
+
+            prompts = [tokenizer.decode(doc_chunk_ids[i])]
+            llm.generate(prompts, sampling_params)
+
+            layer_kvs: list = []
+            for j in range(num_layers):
+                past_key_values = layers[j].self_attn.hack_kv
+                if i == 0:
+                    temp_k = past_key_values[0][:s_start_len].clone()
+                    temp_v = past_key_values[1][:s_start_len].clone()
+                else:
+                    temp_k = past_key_values[0][
+                        s_start_1_len : len(doc_chunk_ids[i]) + 1
+                    ].clone()
+                    temp_v = past_key_values[1][
+                        s_start_1_len : len(doc_chunk_ids[i]) + 1
+                    ].clone()
+
+                if i == 0:
+                    chunk_past_key_values.append([temp_k, temp_v])
+                else:
+                    chunk_past_key_values[j][0] = torch.cat(
+                        (chunk_past_key_values[j][0], temp_k), dim=0
+                    )
+                    chunk_past_key_values[j][1] = torch.cat(
+                        (chunk_past_key_values[j][1], temp_v), dim=0
+                    )
+                layer_kvs.append([temp_k, temp_v])
+
+                if clear_hack_kv:
+                    layers[j].self_attn.hack_kv = None
+
+            fifo.put(ck, layer_kvs)
+            model_ref.old_kvs = chunk_past_key_values
+
+        input_ids: list = []
+        for i in range(len(doc_chunk_ids)):
+            if i == 0:
+                temp_ids = doc_chunk_ids[i]
+            else:
+                temp_ids = doc_chunk_ids[i][s_start_1_len - 1 :]
+            input_ids += temp_ids
+        input_prompt = tokenizer.decode(input_ids)
+
+        sampling_params = SamplingParams(temperature=0, max_tokens=max_tokens)
+        cache_fuse_metadata["check"] = True
+        cache_fuse_metadata["collect"] = False
+        cache_fuse_metadata["suffix_len"] = last_len
+        if recomp_ratio is not None:
+            cache_fuse_metadata["recomp_ratio"] = recomp_ratio
+        if fast_attention is not None:
+            cache_fuse_metadata["fast_attention"] = fast_attention
+
+        print(f"Sample idx: {sample_idx}")
+        output = llm.generate([input_prompt], sampling_params)
+        res = output[0].outputs[0].text
+        if post_process:
+            res = post_process(res)
+        print(f"Cached generation: {res}")
+        ttft = output[0].metrics.first_token_time - output[0].metrics.first_scheduled_time
+        print(f"TTFT with cache: {ttft}")
+        ttft_blend.append(ttft)
+        score = max(metric_fn(res, answer, tokenizer) for answer in answers)
+        metric_blend.append(score)
+
+        sampling_params = SamplingParams(temperature=0, max_tokens=max_tokens)
+        cache_fuse_metadata["check"] = False
+        cache_fuse_metadata["collect"] = False
+        output = llm.generate([input_prompt], sampling_params)
+        res = output[0].outputs[0].text
+        if post_process:
+            res = post_process(res)
+        print(f"Normal generation: {res}")
+        ttft = output[0].metrics.first_token_time - output[0].metrics.first_scheduled_time
+        print(f"TTFT with full prefill: {ttft}")
+        ttft_full.append(ttft)
+        score = max(metric_fn(res, answer, tokenizer) for answer in answers)
+        metric_full.append(score)
+        print("------------")
+
+    print("\n=============== Result Summary =====================")
+    print(f"TTFT with cache: {np.mean(ttft_blend)}")
+    print(f"TTFT with full prefill: {np.mean(ttft_full)}")
+    print(f"{metric_name} with cache: {np.mean(metric_blend)}")
+    print(f"{metric_name} with full prefill: {np.mean(metric_full)}")
+    print(f"FIFO stats: {fifo.stats()}")
+
+    coret_stats = tracker.summary()
+    fifo_stat_dict = fifo.stats()
+    coret_stats["fifo_kv"] = fifo_stat_dict
+    coret_stats["stream_seed"] = stream_seed
+    coret_stats["skip_first"] = skip_first
+
+    roll_raw = os.environ.get("REALISTIC_TTFT_ROLL_WINDOW", "25")
+    try:
+        roll_window = max(0, int(roll_raw))
+    except ValueError:
+        roll_window = 25
+    _save_ttft_warmup_plot(
+        dataset_path,
+        ttft_blend,
+        ttft_full,
+        stream_seed=stream_seed,
+        skip_first=skip_first,
+        fifo_stats=fifo_stat_dict,
+        roll_window=roll_window,
+    )
+    save_ttft_histogram(
+        dataset_path,
+        ttft_blend,
+        ttft_full,
+        cached_label="CacheBlend (FIFO KV)",
+        extra_metadata={
+            "stream_seed": stream_seed,
+            "skip_first": skip_first,
+            "fifo_kv": fifo_stat_dict,
+        },
+    )
+
+    output_path = dataset_path.replace(".json", "_coretrieval.json")
+    with open(output_path, "w") as f:
+        json.dump(coret_stats, f, indent=2, default=str)
+    print(f"\nCo-retrieval + FIFO stats saved to {output_path}")
+
+    return {
+        "ttft_blend": ttft_blend,
+        "ttft_full": ttft_full,
+        f"{metric_name}_blend": metric_blend,
+        f"{metric_name}_full": metric_full,
+        "coretrieval": coret_stats,
+    }
+
+
+def _resolve_dataset_path(raw: str) -> str:
+    """Paths are relative to the CompCache repo root (works on Modal cwd=/CompCache or elsewhere)."""
+    p = Path(raw)
+    if not p.is_absolute():
+        p = (_REPO / p).resolve()
+    if not p.is_file():
+        raise FileNotFoundError(
+            f"Dataset not found: {p}"
+        )
+    return str(p)
+
+
+def main() -> None:
+    fifo_max = int(os.environ.get("REALISTIC_FIFO_MAX", "10000"))
+    skip = int(os.environ.get("REALISTIC_SKIP_FIRST", "0"))
+    dataset = os.environ.get(
+        "REALISTIC_DATASET",
+        "realistic_qa/inputs/extended_tiny.json",
+    )
+    dataset_path = _resolve_dataset_path(dataset)
+
+    gpu_raw = os.environ.get("REALISTIC_GPU_MEMORY_UTILIZATION")
+    gpu_memory_utilization = (
+        float(gpu_raw) if gpu_raw is not None else 0.45
+    )
+    max_ctx_raw = os.environ.get("REALISTIC_MAX_CTX_LEN")
+    max_ctx_len = int(max_ctx_raw) if max_ctx_raw else None
+    mml_raw = os.environ.get("REALISTIC_MAX_MODEL_LEN")
+    max_model_len = int(mml_raw) if mml_raw else None
+    if max_model_len is None and max_ctx_len is not None:
+        # Doc tokens are capped at max_ctx_len; prompt adds inst/query/template overhead.
+        max_model_len = max_ctx_len + 2048
+
+    run_blend_eval_fifo(
+        dataset_path=dataset_path,
+        prefix_prompt=(
+            "You will be asked a question after reading several passages."
+            " Please directly answer the question based on the given passages."
+            " Do NOT repeat the question."
+            " The answer should be within 5 words..\nPassages:\n"
+        ),
+        prompt_builder=lambda ex: build_qa_prompt(ex, query_prompt),
+        metric_fn=compute_f1,
+        metric_name="F1",
+        inst_tokens=[733, 16289, 28793],
+        s_end=[733, 28748, 16289, 28793],
+        suffix_is_query_len=False,
+        max_tokens=32,
+        model_name="mistralai/Mistral-7B-Instruct-v0.2",
+        gpu_memory_utilization=gpu_memory_utilization,
+        max_model_len=max_model_len,
+        max_ctx_len=max_ctx_len,
+        stream_seed=34,
+        skip_first=skip,
+        fifo_max_chunks=fifo_max,
+    )
+
+
+if __name__ == "__main__":
+    main()
