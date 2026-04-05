@@ -18,12 +18,6 @@ def save_ttft_histogram(
     full_label: str = "Full prefill",
     extra_metadata: dict | None = None,
 ) -> tuple[str, str | None]:
-    """Persist TTFT samples and an overlaid histogram (cached vs full prefill) next to the dataset.
-
-    TTFT values are seconds (vLLM ``first_token_time - first_scheduled_time``).
-    Writes ``{stem}_ttft_hist.json`` and ``{stem}_ttft_hist.png`` (PNG omitted if matplotlib
-    is missing).
-    """
     n = len(ttft_blend)
     if n == 0 or len(ttft_full) != n:
         return "", None
@@ -494,6 +488,21 @@ def run_blend_eval(
     print(f"\nCo-retrieval data saved to {output_path}")
 
     save_ttft_histogram(dataset_path, ttft_blend, ttft_full)
+
+    scores_path = Path(dataset_path).resolve()
+    scores_path = scores_path.with_name(f"{scores_path.stem}_scores.json")
+    scores_payload = {
+        "metric_name": metric_name,
+        f"{metric_name}_blend": [float(x) for x in metric_blend],
+        f"{metric_name}_full": [float(x) for x in metric_full],
+        f"mean_{metric_name}_blend": float(np.mean(metric_blend)),
+        f"mean_{metric_name}_full": float(np.mean(metric_full)),
+        "n_queries": len(metric_blend),
+        "dataset": str(Path(dataset_path).resolve()),
+    }
+    with open(scores_path, "w") as f:
+        json.dump(scores_payload, f, indent=2)
+    print(f"Quality scores saved to {scores_path}")
 
     return {
         "ttft_blend": ttft_blend,

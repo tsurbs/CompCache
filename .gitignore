@@ -4,3 +4,4 @@ outputs/
 
 .DS_Store
 INTERNAL_*
+.env

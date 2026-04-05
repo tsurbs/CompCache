@@ -145,14 +145,14 @@ def run_blend_eval_fifo(
     from vllm import LLM, SamplingParams
     from transformers import AutoTokenizer
 
-    eval_dataset = load_dataset(dataset_path)
+    full_dataset = load_dataset(dataset_path)
     if shuffle_dataset:
         rng = __import__("random").Random(stream_seed)
-        eval_dataset = list(eval_dataset)
-        rng.shuffle(eval_dataset)
+        full_dataset = list(full_dataset)
+        rng.shuffle(full_dataset)
 
-    if skip_first:
-        eval_dataset = eval_dataset[skip_first:]
+    warmup_dataset = full_dataset[:skip_first] if skip_first else []
+    eval_dataset = full_dataset[skip_first:] if skip_first else full_dataset
 
     llm_kwargs: dict = {
         "model": model_name,
@@ -188,6 +188,56 @@ def run_blend_eval_fifo(
         .model_runner.model.model
     )
     layers = model_ref.layers
+
+    if warmup_dataset:
+        print(f"[warmup] Processing {len(warmup_dataset)} queries to populate FIFO cache …")
+        sampling_params_warmup = SamplingParams(temperature=0, max_tokens=1)
+        cache_fuse_metadata = model_ref.cache_fuse_metadata
+        for wi, ex in enumerate(warmup_dataset):
+            doc_prompts_w, _ = prompt_builder(ex)
+            doc_chunk_ids_w = [tokenizer.encode(doc)[1:] for doc in doc_prompts_w]
+
+            if max_ctx_len is not None:
+                while len(list(chain.from_iterable(doc_chunk_ids_w))) > max_ctx_len:
+                    del_idx = int(len(doc_chunk_ids_w) / 2)
+                    del doc_chunk_ids_w[del_idx]
+                if len(doc_chunk_ids_w) == 0:
+                    continue
+
+            doc_chunk_ids_w = [s_start + cids for cids in doc_chunk_ids_w]
+            doc_chunk_ids_w = [s_start_full] + doc_chunk_ids_w
+
+            cache_fuse_metadata["collect"] = True
+            cache_fuse_metadata["check"] = False
+            for k, v in extra_metadata.items():
+                cache_fuse_metadata[k] = v
+
+            for i, chunk_ids in enumerate(doc_chunk_ids_w):
+                ck = _chunk_cache_key(i, chunk_ids)
+                if fifo.get(ck) is not None:
+                    continue
+                prompts = [tokenizer.decode(chunk_ids)]
+                llm.generate(prompts, sampling_params_warmup)
+                layer_kvs: list = []
+                for j in range(num_layers):
+                    past_key_values = layers[j].self_attn.hack_kv
+                    if i == 0:
+                        temp_k = past_key_values[0][:s_start_len].clone()
+                        temp_v = past_key_values[1][:s_start_len].clone()
+                    else:
+                        temp_k = past_key_values[0][s_start_1_len:len(chunk_ids)+1].clone()
+                        temp_v = past_key_values[1][s_start_1_len:len(chunk_ids)+1].clone()
+                    layer_kvs.append([temp_k, temp_v])
+                    if clear_hack_kv:
+                        layers[j].self_attn.hack_kv = None
+                fifo.put(ck, layer_kvs)
+
+            if (wi + 1) % 200 == 0 or wi == len(warmup_dataset) - 1:
+                print(f"[warmup] {wi + 1}/{len(warmup_dataset)} — FIFO: {fifo.stats()}")
+
+        cache_fuse_metadata["collect"] = False
+        cache_fuse_metadata["check"] = False
+        print(f"[warmup] Done. FIFO: {fifo.stats()}")
 
     for sample_idx, ex in enumerate(eval_dataset):
         answers = ex["answers"]
@@ -366,6 +416,24 @@ def run_blend_eval_fifo(
     with open(output_path, "w") as f:
         json.dump(coret_stats, f, indent=2, default=str)
     print(f"\nCo-retrieval + FIFO stats saved to {output_path}")
+
+    scores_path = Path(dataset_path).resolve()
+    scores_path = scores_path.with_name(f"{scores_path.stem}_scores.json")
+    scores_payload = {
+        "metric_name": metric_name,
+        f"{metric_name}_blend": [float(x) for x in metric_blend],
+        f"{metric_name}_full": [float(x) for x in metric_full],
+        f"mean_{metric_name}_blend": float(np.mean(metric_blend)),
+        f"mean_{metric_name}_full": float(np.mean(metric_full)),
+        "n_queries": len(metric_blend),
+        "dataset": str(Path(dataset_path).resolve()),
+        "stream_seed": stream_seed,
+        "skip_first": skip_first,
+        "fifo_kv": fifo_stat_dict,
+    }
+    with open(scores_path, "w") as f:
+        json.dump(scores_payload, f, indent=2)
+    print(f"Quality scores saved to {scores_path}")
 
     return {
         "ttft_blend": ttft_blend,

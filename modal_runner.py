@@ -301,6 +301,7 @@ def _collect_result_jsons() -> dict[str, bytes]:
     ):
         for pattern in (
             "*_coretrieval.json",
+            "*_scores.json",
             "*_synthetic_zipf.json",
             "*_ttft_warmup.json",
             "*_ttft_warmup.png",
