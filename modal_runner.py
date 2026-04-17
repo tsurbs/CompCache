@@ -301,7 +301,9 @@ def _collect_result_jsons() -> dict[str, bytes]:
     ):
         for pattern in (
             "*_coretrieval.json",
+            "*_comp_coretrieval.json",
             "*_scores.json",
+            "*_comp_scores.json",
             "*_synthetic_zipf.json",
             "*_ttft_warmup.json",
             "*_ttft_warmup.png",
@@ -437,8 +439,21 @@ def run_realistic_blend(
     max_ctx_len: int = 8192,
     max_model_len: int = 0,
     gpu_memory_utilization: float = 0.45,
+    mode: str = "fifo",
+    pair_store_capacity: int = 256,
+    promotion_threshold: int = 10,
+    promote_sync: bool = False,
 ) -> dict[str, bytes]:
-    """FIFO CacheBlend evaluation on a realistic_qa JSON (see ``blend_realistic.py``).
+    """CacheBlend evaluation on a realistic_qa JSON (see ``blend_realistic.py``).
+
+    ``mode=fifo`` reproduces the baseline FIFO path; ``mode=comp`` enables
+    composition-aware pair KV caching (Proposal §3.1): a ``PairKVStore`` +
+    async ``PromotionWorker`` that materializes joint KV for frequently
+    co-retrieved document pairs. ``pair_store_capacity`` is the max number of
+    promoted pairs held at once; ``promotion_threshold`` is the co-retrieval
+    count at which a pair gets enqueued for async promotion; ``promote_sync``
+    forces promotion on the triggering query (single-threaded, deterministic
+    microbench mode).
 
     ``max_ctx_len`` trims passage chunks (middle-out) so long multi-hop prompts fit
     on a ~48GB GPU; use 0 to disable. ``max_model_len`` caps vLLM context (scheduler
@@ -456,6 +471,10 @@ def run_realistic_blend(
     os.environ["REALISTIC_FIFO_MAX"] = str(fifo_max)
     os.environ["REALISTIC_SKIP_FIRST"] = str(skip_first)
     os.environ["REALISTIC_GPU_MEMORY_UTILIZATION"] = str(gpu_memory_utilization)
+    os.environ["REALISTIC_MODE"] = mode
+    os.environ["REALISTIC_PAIR_STORE_CAP"] = str(pair_store_capacity)
+    os.environ["REALISTIC_PROMOTION_THRESHOLD"] = str(promotion_threshold)
+    os.environ["REALISTIC_PROMOTE_SYNC"] = "1" if promote_sync else "0"
     if max_ctx_len > 0:
         os.environ["REALISTIC_MAX_CTX_LEN"] = str(max_ctx_len)
     else:
@@ -471,10 +490,12 @@ def run_realistic_blend(
     _mistral_only(path)
 
     print(
-        f"[modal] realistic QA: dataset={dataset} fifo_max={fifo_max} "
+        f"[modal] realistic QA: dataset={dataset} mode={mode} fifo_max={fifo_max} "
         f"skip_first={skip_first} max_ctx_len={max_ctx_len} "
         f"max_model_len={max_model_len or '(auto or HF)'} "
-        f"gpu_memory_utilization={gpu_memory_utilization}",
+        f"gpu_memory_utilization={gpu_memory_utilization} "
+        f"pair_store_cap={pair_store_capacity} promotion_threshold={promotion_threshold} "
+        f"promote_sync={promote_sync}",
         flush=True,
     )
     _invoke_blend_realistic_main()
@@ -516,8 +537,12 @@ def realistic(
     max_ctx_len: int = 8192,
     max_model_len: int = 0,
     gpu_memory_utilization: float = 0.45,
+    mode: str = "fifo",
+    pair_store_capacity: int = 256,
+    promotion_threshold: int = 10,
+    promote_sync: bool = False,
 ):
-    """Run extended / FIFO CacheBlend on Modal.
+    """Run extended CacheBlend on Modal (FIFO or composition-aware).
 
     Default is the committed smoke fixture. For the full 6K benchmark, build locally then::
 
@@ -530,6 +555,9 @@ def realistic(
 
         modal run modal_runner.py::realistic
         modal run modal_runner.py::realistic --skip-first 1000
+        modal run modal_runner.py::realistic --mode comp --pair-store-capacity 256 \
+            --promotion-threshold 10
+        modal run modal_runner.py::realistic --mode comp --promote-sync    # microbench
     """
     with modal.enable_output():
         artifacts = run_realistic_blend.remote(
@@ -539,6 +567,10 @@ def realistic(
             max_ctx_len=max_ctx_len,
             max_model_len=max_model_len,
             gpu_memory_utilization=gpu_memory_utilization,
+            mode=mode,
+            pair_store_capacity=pair_store_capacity,
+            promotion_threshold=promotion_threshold,
+            promote_sync=promote_sync,
         )
     _save_results_locally(artifacts)
 
