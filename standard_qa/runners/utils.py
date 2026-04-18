@@ -288,6 +288,7 @@ def run_blend_eval(
     s_end=None,
     suffix_is_query_len=True,
     max_ctx_len=None,
+    max_model_len=None,
     max_tokens=32,
     recomp_ratio=None,
     fast_attention=None,
@@ -313,6 +314,10 @@ def run_blend_eval(
                              If False, suffix_len = 1.
         max_ctx_len: Optional max context length; chunks are dropped from the
                      middle when exceeded.  None disables.
+        max_model_len: vLLM engine context cap (KV blocks). If None and
+            ``max_ctx_len`` is set, defaults to ``max_ctx_len + max_tokens + 1024``
+            so the scheduler does not reserve 32k KV on a small GPU. If both are
+            None, Hugging Face max length is used (may OOM on large HF limits).
         max_tokens: Max new tokens to generate.
         recomp_ratio: Selective recomputation ratio (None = don't set).
         fast_attention: Fast attention flag (None = don't set).
@@ -335,7 +340,16 @@ def run_blend_eval(
 
     eval_dataset = load_dataset(dataset_path)
 
-    llm = LLM(model=model_name, gpu_memory_utilization=gpu_memory_utilization)
+    effective_max_model_len = max_model_len
+    if effective_max_model_len is None and max_ctx_len is not None:
+        effective_max_model_len = int(max_ctx_len) + int(max_tokens) + 1024
+    llm_kwargs = dict(
+        model=model_name,
+        gpu_memory_utilization=gpu_memory_utilization,
+    )
+    if effective_max_model_len is not None:
+        llm_kwargs["max_model_len"] = int(effective_max_model_len)
+    llm = LLM(**llm_kwargs)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     llm.set_tokenizer(tokenizer)
 

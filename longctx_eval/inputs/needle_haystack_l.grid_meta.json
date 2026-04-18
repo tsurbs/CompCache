@@ -1,0 +1,12 @@
+{
+  "mode": "grid",
+  "depth_steps": 12,
+  "context_steps": 12,
+  "replicas": 2,
+  "max_token_budget": 16384,
+  "min_chars": 3342,
+  "max_chars": 55705,
+  "chars_per_token_assumption": 3.4,
+  "n_ctx": 12,
+  "n_examples": 288
+}

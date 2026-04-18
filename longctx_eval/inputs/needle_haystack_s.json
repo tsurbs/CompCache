@@ -1,0 +1,258 @@
+[
+  {
+    "question": "What is the Recovery passphrase listed in the internal note?",
+    "answers": [
+      "aurora-91-bravo"
+    ],
+    "ctxs": [
+      {
+        "title": "Quarterly memo",
+        "text": "Team, please route misc tickets through the triage board. No secrets belong in this channel. Performance review windows open next month; managers will share timelines separately. This memo repeats standard boilerplate about expense policies and badge revalidation."
+      },
+      {
+        "title": "Runbook excerpt",
+        "text": "Database failovers should follow playbooks in the infra wiki. The internal note for vault drills still lists the Recovery passphrase as aurora-91-bravo for lab hosts only. Do not paste that string into customer-facing tickets."
+      },
+      {
+        "title": "Office ops",
+        "text": "Cafeteria hours shift during holidays. Parking permits renew on a rolling basis. The loading dock accepts deliveries between 7am and 3pm local time. HVAC work may cause noise in wing B on Tuesdays."
+      },
+      {
+        "title": "Training blurb",
+        "text": "Phishing simulations continue quarterly. Report suspicious links through the security chrome extension. Password rotations are automated for most apps; legacy shells may require manual updates on jump boxes."
+      }
+    ],
+    "needle_chunk": 1
+  },
+  {
+    "question": "Which city hosts the 2027 pilot for Project Lantern?",
+    "answers": [
+      "Bristol"
+    ],
+    "ctxs": [
+      {
+        "title": "Press summary",
+        "text": "The company announced a broad sustainability initiative spanning several regions. Stakeholders emphasized metrics on energy use and supplier audits. No firm dates were shared for every milestone in the external release."
+      },
+      {
+        "title": "Internal roadmap note",
+        "text": "Project Lantern timelines remain confidential. For planning only: the 2027 pilot city is Bristol, chosen for grid partner density and regulatory sandboxes. Do not quote this line externally until comms approves the city rollout story."
+      },
+      {
+        "title": "Vendor catalog",
+        "text": "Suppliers are categorized by risk tier. Tier-one vendors undergo annual on-site reviews. Tier-two vendors submit questionnaires. Logistics partners are renegotiated every six months based on volume commitments."
+      }
+    ],
+    "needle_chunk": 1
+  },
+  {
+    "question": "What three-letter code must appear on emergency crates?",
+    "answers": [
+      "QRX"
+    ],
+    "ctxs": [
+      {
+        "title": "Warehouse checklist",
+        "text": "Pallets should be banded and photographed on intake. Recall order forms use barcode series L7. Seasonal SKUs are routed to cold storage without repackaging unless QA flags damage."
+      },
+      {
+        "title": "Safety addendum",
+        "text": "For the rare medical resupply lane, every emergency crate must be stenciled with the code QRX on two opposite sides. This distinguishes sterile packs from general consumables during rapid dispatch drills."
+      },
+      {
+        "title": "HR bulletin",
+        "text": "Open enrollment closes Friday. Dependent verification documents go to the benefits portal. Flexible spending reminders will be emailed automatically; paper forms are discouraged."
+      }
+    ],
+    "needle_chunk": 1
+  },
+  {
+    "question": "How many redundant fiber spans were approved for the ridge relay?",
+    "answers": [
+      "3"
+    ],
+    "ctxs": [
+      {
+        "title": "Terrain survey",
+        "text": "The ridge relay path crosses unstable scree and two seasonal streams. Civil teams flagged frost heave risks on the northern approach. Wildlife cameras recorded occasional crossings but no nesting conflicts."
+      },
+      {
+        "title": "Engineering decision log",
+        "text": "After the outage postmortem, the backbone team approved 3 redundant fiber spans for the ridge relay segment. Budget line items were shifted from marketing experiments; finance signed off under contingency code ridge-RR-aug."
+      },
+      {
+        "title": "Procurement newsletter",
+        "text": "Cable spools arriving in April require humidity-controlled storage. Fiber splice trailers need refurbished grounding straps before deployment. New vendors must complete ethics training."
+      }
+    ],
+    "needle_chunk": 1
+  },
+  {
+    "question": "Who signed the temporary custody handoff on 14 May?",
+    "answers": [
+      "M. Ortega"
+    ],
+    "ctxs": [
+      {
+        "title": "Field roster",
+        "text": "Rotations for May balanced senior leads across three sites. Overtime caps remained unchanged. Shuttle schedules were compressed due to road maintenance near depot four."
+      },
+      {
+        "title": "Legal scratch pad",
+        "text": "Chain-of-custody drafts are messy; rely on the e-sign archive. For the lab instruments dispute, the temporary custody handoff on 14 May was countersigned by M. Ortega after onsite verification photos uploaded."
+      },
+      {
+        "title": "IT ticket digest",
+        "text": "VPN latency spikes traced to an upstream provider. Laptops on build 17.4 need patching before Friday. Helpdesk hours extend during the audit week only."
+      }
+    ],
+    "needle_chunk": 1
+  },
+  {
+    "question": "What coolant mixture ratio is specified for the turbine test cell?",
+    "answers": [
+      "40/60 glycol"
+    ],
+    "ctxs": [
+      {
+        "title": "Vendor invoice notes",
+        "text": "Pump seals were backordered twice in Q1. Spare rotors remain in bonded storage until customs clears the bonded lot. Accounting tagged the shipment as capital equipment pending depreciation review."
+      },
+      {
+        "title": "Test cell configuration",
+        "text": "The turbine test cell requires a strict thermal profile. Maintenance locked the coolant mixture ratio at 40/60 glycol to match the bearing manufacturer warranty. Deviations void overnight endurance runs."
+      },
+      {
+        "title": "Facilities gossip",
+        "text": "Elevator modernization slips to July. Coffee machine three is flaky again. Building access cards mis-scan near the east reader after rain; facilities taped a workaround sign."
+      }
+    ],
+    "needle_chunk": 1
+  },
+  {
+    "question": "Which airport code is printed on the decoy shipping labels?",
+    "answers": [
+      "OSL"
+    ],
+    "ctxs": [
+      {
+        "title": "Logistics playbook",
+        "text": "High-value GPU crates use dual seals and randomized route chatter. Decoy shipping labels intentionally show airport code OSL to mislead opportunistic intercepts while real manifests stay encrypted inside the TMS."
+      },
+      {
+        "title": "Carrier SLA",
+        "text": "Late deliveries beyond 36 hours trigger automatic credits. Weather exemptions require documented advisories. Weekend liftgates cost extra unless contract riders apply."
+      },
+      {
+        "title": "Random chatter",
+        "text": "Teams debated lunch options near pier seven. Someone mentioned karaoke plans unrelated to freight. Telemetry dashboards were rebooted after a Grafana plugin update."
+      }
+    ],
+    "needle_chunk": 0
+  },
+  {
+    "question": "What is the batch ID stamped on the contaminated silica drums?",
+    "answers": [
+      "SX-4091"
+    ],
+    "ctxs": [
+      {
+        "title": "Inventory scan",
+        "text": "Row 12 bins were reorganized for faster pick paths. RFID tags on polymer totes were refreshed. A forklift certification lapse was escalated to the safety officer."
+      },
+      {
+        "title": "Env health incident",
+        "text": "QA isolated off-spec silica from supplier Atlantic Sands. The contaminated silica drums carry batch ID SX-4091 and must remain quarantined until the external lab clears retesting on heavy metals."
+      },
+      {
+        "title": "Training attendance",
+        "text": "Forklift recertification sessions filled quickly. Hazmat refreshers are mandatory for anyone entering zone C regardless of tenure."
+      }
+    ],
+    "needle_chunk": 1
+  },
+  {
+    "question": "Which API version does the mobile wallet integration target?",
+    "answers": [
+      "v2025.04"
+    ],
+    "ctxs": [
+      {
+        "title": "Design critique notes",
+        "text": "UX prefers larger tap targets on onboarding. Copydeck argued about colon usage in error banners. Motion studies for the loyalty tab are postponed."
+      },
+      {
+        "title": "Integration spec (draft)",
+        "text": "Wallet SDK 4.x deprecates legacy HMAC headers. The mobile wallet integration explicitly targets API version v2025.04 for all signed checkout calls; older minors will hard-fail in staging after May first."
+      },
+      {
+        "title": "Random standup",
+        "text": "Backend chasing a flaky Redis cluster. Frontend fixed a stray padding issue on tablets only. Data science paused churn model retraining until the warehouse sync completes."
+      }
+    ],
+    "needle_chunk": 1
+  },
+  {
+    "question": "What color ribbon marks patient files requiring interpreter services?",
+    "answers": [
+      "teal"
+    ],
+    "ctxs": [
+      {
+        "title": "Clinic announcements",
+        "text": "Flu vaccine clinics extend hours on Thursdays. Parking validation vouchers now require the new QR format from reception. Lost-and-found donates unclaimed items monthly."
+      },
+      {
+        "title": "Care coordination memo",
+        "text": "Interpreter bookings should be requested 24 hours ahead when possible. Charting policy: wrap any patient file needing interpreter services with a teal ribbon sticker so intake triage routes them to the language line queue."
+      },
+      {
+        "title": "Supply cabinet list",
+        "text": "Gloves sizes restocked. Thermal labels for labs are backordered. Name badges for temps arrive Tuesday."
+      }
+    ],
+    "needle_chunk": 1
+  },
+  {
+    "question": "What is the unlock PIN for the demo safe in the showroom?",
+    "answers": [
+      "4829"
+    ],
+    "ctxs": [
+      {
+        "title": "Showroom etiquette",
+        "text": "Guests must wear closed-toe shoes on the factory tour. Photography is limited to the lobby wall displays. Demo units cycle daily; staff should not promise bespoke paint until sales confirms lead times."
+      },
+      {
+        "title": "Demo logistics",
+        "text": "The rotating showroom safe is loaded with dummy documents only. Facilities set the unlock PIN for the demo safe to 4829 and rotate it monthly; note the latest value on the laminated sheet inside the AV closet."
+      },
+      {
+        "title": "Catering invoice",
+        "text": "Sandwich platters for investor day came in within budget. Additional coffee urns were billed separately. Recycling bins were missing liners on level two."
+      }
+    ],
+    "needle_chunk": 1
+  },
+  {
+    "question": "Which species code appears on the tagged saplings in sector nine?",
+    "answers": [
+      "PSME"
+    ],
+    "ctxs": [
+      {
+        "title": "Weather log",
+        "text": "Light drizzle slowed planting on Monday afternoon. Wind gusts peaked at 22 knots near the ridge firebreak. Soil moisture sensors looked nominal after calibration."
+      },
+      {
+        "title": "Reforestation log",
+        "text": "Contract crews finished mounding in sector nine ahead of schedule. Tagged saplings for the drought trial use species code PSME on RFID collars to distinguish them from the cedar control rows."
+      },
+      {
+        "title": "Tool maintenance",
+        "text": "Chains rented from depot C need sharpening before the western crew borrows them. Fuel mixes for two-stroke augers were standardized last season."
+      }
+    ],
+    "needle_chunk": 1
+  }
+]

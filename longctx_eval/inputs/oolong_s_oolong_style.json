@@ -1,0 +1,110 @@
+{
+  "benchmark": "oolong_style",
+  "dataset": "/CompCache/longctx_eval/inputs/oolong_s.json",
+  "n_examples": 15,
+  "overall": {
+    "mean_F1_blend": 0.047014501934968526,
+    "mean_F1_full": 0.07036859797770614,
+    "std_F1_blend": 0.050072094451495595,
+    "std_F1_full": 0.04133338156452361
+  },
+  "by_context_quartile": [
+    {
+      "label": "Q1\n[140-165]ch",
+      "mean_F1_blend": 0.030303030303030304,
+      "mean_F1_full": 0.08342165695106872
+    },
+    {
+      "label": "Q2\n[168-173]ch",
+      "mean_F1_blend": 0.03364389233954451,
+      "mean_F1_full": 0.05263696876600102
+    },
+    {
+      "label": "Q3\n[177-191]ch",
+      "mean_F1_blend": 0.07916666666666666,
+      "mean_F1_full": 0.0739247311827957
+    },
+    {
+      "label": "Q4\n[197-521]ch",
+      "mean_F1_blend": 0.04076655052264808,
+      "mean_F1_full": 0.07475429975429976
+    }
+  ],
+  "per_example": [
+    {
+      "context_chars": 521,
+      "F1_blend": 0.1142857142857143,
+      "F1_full": 0.1
+    },
+    {
+      "context_chars": 301,
+      "F1_blend": 0.0,
+      "F1_full": 0.0
+    },
+    {
+      "context_chars": 203,
+      "F1_blend": 0.048780487804878044,
+      "F1_full": 0.0909090909090909
+    },
+    {
+      "context_chars": 168,
+      "F1_blend": 0.0,
+      "F1_full": 0.05714285714285715
+    },
+    {
+      "context_chars": 190,
+      "F1_blend": 0.0,
+      "F1_full": 0.0
+    },
+    {
+      "context_chars": 191,
+      "F1_blend": 0.1,
+      "F1_full": 0.09523809523809523
+    },
+    {
+      "context_chars": 197,
+      "F1_blend": 0.0,
+      "F1_full": 0.1081081081081081
+    },
+    {
+      "context_chars": 177,
+      "F1_blend": 0.08333333333333334,
+      "F1_full": 0.07142857142857144
+    },
+    {
+      "context_chars": 140,
+      "F1_blend": 0.09090909090909091,
+      "F1_full": 0.058823529411764705
+    },
+    {
+      "context_chars": 170,
+      "F1_blend": 0.0,
+      "F1_full": 0.06451612903225806
+    },
+    {
+      "context_chars": 172,
+      "F1_blend": 0.08695652173913045,
+      "F1_full": 0.08888888888888888
+    },
+    {
+      "context_chars": 165,
+      "F1_blend": 0.0,
+      "F1_full": 0.1081081081081081
+    },
+    {
+      "context_chars": 177,
+      "F1_blend": 0.13333333333333333,
+      "F1_full": 0.12903225806451613
+    },
+    {
+      "context_chars": 173,
+      "F1_blend": 0.047619047619047616,
+      "F1_full": 0.0
+    },
+    {
+      "context_chars": 149,
+      "F1_blend": 0.0,
+      "F1_full": 0.08333333333333334
+    }
+  ]
+}

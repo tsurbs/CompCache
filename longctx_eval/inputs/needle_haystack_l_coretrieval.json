@@ -1,0 +1,215 @@
+{
+  "alpha": 0.047932890535999126,
+  "r_squared": 0.7258324113975878,
+  "n_queries": 288,
+  "n_unique_docs": 8,
+  "n_unique_pairs": 28,
+  "top_pairs": [
+    [
+      [
+        "Engineering note",
+        "Random standup"
+      ],
+      194
+    ],
+    [
+      [
+        "Random standup",
+        "Runbook fragment"
+      ],
+      193
+    ],
+    [
+      [
+        "Engineering note",
+        "Runbook fragment"
+      ],
+      192
+    ],
+    [
+      [
+        "HR reminder",
+        "Runbook fragment"
+      ],
+      191
+    ],
+    [
+      [
+        "HR reminder",
+        "Random standup"
+      ],
+      191
+    ],
+    [
+      [
+        "Legal scratch pad",
+        "Random standup"
+      ],
+      191
+    ],
+    [
+      [
+        "Engineering note",
+        "Vendor chatter"
+      ],
+      190
+    ],
+    [
+      [
+        "Engineering note",
+        "HR reminder"
+      ],
+      189
+    ],
+    [
+      [
+        "Runbook fragment",
+        "Vendor chatter"
+      ],
+      189
+    ],
+    [
+      [
+        "Random standup",
+        "Vendor chatter"
+      ],
+      189
+    ],
+    [
+      [
+        "Legal scratch pad",
+        "Runbook fragment"
+      ],
+      187
+    ],
+    [
+      [
+        "Engineering note",
+        "Legal scratch pad"
+      ],
+      184
+    ],
+    [
+      [
+        "HR reminder",
+        "Legal scratch pad"
+      ],
+      184
+    ],
+    [
+      [
+        "HR reminder",
+        "Vendor chatter"
+      ],
+      184
+    ],
+    [
+      [
+        "Facilities log",
+        "Random standup"
+      ],
+      184
+    ],
+    [
+      [
+        "HR reminder",
+        "Ops bulletin"
+      ],
+      181
+    ],
+    [
+      [
+        "Ops bulletin",
+        "Random standup"
+      ],
+      180
+    ],
+    [
+      [
+        "Legal scratch pad",
+        "Vendor chatter"
+      ],
+      178
+    ],
+    [
+      [
+        "Engineering note",
+        "Facilities log"
+      ],
+      177
+    ],
+    [
+      [
+        "Engineering note",
+        "Ops bulletin"
+      ],
+      177
+    ],
+    [
+      [
+        "Facilities log",
+        "Runbook fragment"
+      ],
+      175
+    ],
+    [
+      [
+        "Facilities log",
+        "Vendor chatter"
+      ],
+      175
+    ],
+    [
+      [
+        "Ops bulletin",
+        "Runbook fragment"
+      ],
+      175
+    ],
+    [
+      [
+        "Facilities log",
+        "HR reminder"
+      ],
+      173
+    ],
+    [
+      [
+        "Facilities log",
+        "Legal scratch pad"
+      ],
+      172
+    ],
+    [
+      [
+        "Ops bulletin",
+        "Vendor chatter"
+      ],
+      170
+    ],
+    [
+      [
+        "Legal scratch pad",
+        "Ops bulletin"
+      ],
+      169
+    ],
+    [
+      [
+        "Facilities log",
+        "Ops bulletin"
+      ],
+      162
+    ]
+  ],
+  "doc_frequencies": {
+    "Engineering note": 492,
+    "Runbook fragment": 445,
+    "Legal scratch pad": 432,
+    "Ops bulletin": 423,
+    "Vendor chatter": 420,
+    "Random standup": 420,
+    "HR reminder": 417,
+    "Facilities log": 407
+  }
+}

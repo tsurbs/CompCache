@@ -1,0 +1,321 @@
+{
+  "alpha": null,
+  "r_squared": null,
+  "n_queries": 12,
+  "n_unique_docs": 37,
+  "n_unique_pairs": 39,
+  "top_pairs": [
+    [
+      [
+        "Office ops",
+        "Quarterly memo"
+      ],
+      1
+    ],
+    [
+      [
+        "Office ops",
+        "Runbook excerpt"
+      ],
+      1
+    ],
+    [
+      [
+        "Office ops",
+        "Training blurb"
+      ],
+      1
+    ],
+    [
+      [
+        "Quarterly memo",
+        "Runbook excerpt"
+      ],
+      1
+    ],
+    [
+      [
+        "Quarterly memo",
+        "Training blurb"
+      ],
+      1
+    ],
+    [
+      [
+        "Runbook excerpt",
+        "Training blurb"
+      ],
+      1
+    ],
+    [
+      [
+        "Internal roadmap note",
+        "Press summary"
+      ],
+      1
+    ],
+    [
+      [
+        "Internal roadmap note",
+        "Vendor catalog"
+      ],
+      1
+    ],
+    [
+      [
+        "Press summary",
+        "Vendor catalog"
+      ],
+      1
+    ],
+    [
+      [
+        "HR bulletin",
+        "Safety addendum"
+      ],
+      1
+    ],
+    [
+      [
+        "HR bulletin",
+        "Warehouse checklist"
+      ],
+      1
+    ],
+    [
+      [
+        "Safety addendum",
+        "Warehouse checklist"
+      ],
+      1
+    ],
+    [
+      [
+        "Engineering decision log",
+        "Procurement newsletter"
+      ],
+      1
+    ],
+    [
+      [
+        "Engineering decision log",
+        "Terrain survey"
+      ],
+      1
+    ],
+    [
+      [
+        "Procurement newsletter",
+        "Terrain survey"
+      ],
+      1
+    ],
+    [
+      [
+        "Field roster",
+        "IT ticket digest"
+      ],
+      1
+    ],
+    [
+      [
+        "Field roster",
+        "Legal scratch pad"
+      ],
+      1
+    ],
+    [
+      [
+        "IT ticket digest",
+        "Legal scratch pad"
+      ],
+      1
+    ],
+    [
+      [
+        "Facilities gossip",
+        "Test cell configuration"
+      ],
+      1
+    ],
+    [
+      [
+        "Facilities gossip",
+        "Vendor invoice notes"
+      ],
+      1
+    ],
+    [
+      [
+        "Test cell configuration",
+        "Vendor invoice notes"
+      ],
+      1
+    ],
+    [
+      [
+        "Carrier SLA",
+        "Logistics playbook"
+      ],
+      1
+    ],
+    [
+      [
+        "Carrier SLA",
+        "Random chatter"
+      ],
+      1
+    ],
+    [
+      [
+        "Logistics playbook",
+        "Random chatter"
+      ],
+      1
+    ],
+    [
+      [
+        "Env health incident",
+        "Inventory scan"
+      ],
+      1
+    ],
+    [
+      [
+        "Env health incident",
+        "Training attendance"
+      ],
+      1
+    ],
+    [
+      [
+        "Inventory scan",
+        "Training attendance"
+      ],
+      1
+    ],
+    [
+      [
+        "Design critique notes",
+        "Integration spec (draft)"
+      ],
+      1
+    ],
+    [
+      [
+        "Design critique notes",
+        "Random standup"
+      ],
+      1
+    ],
+    [
+      [
+        "Integration spec (draft)",
+        "Random standup"
+      ],
+      1
+    ],
+    [
+      [
+        "Care coordination memo",
+        "Clinic announcements"
+      ],
+      1
+    ],
+    [
+      [
+        "Care coordination memo",
+        "Supply cabinet list"
+      ],
+      1
+    ],
+    [
+      [
+        "Clinic announcements",
+        "Supply cabinet list"
+      ],
+      1
+    ],
+    [
+      [
+        "Catering invoice",
+        "Demo logistics"
+      ],
+      1
+    ],
+    [
+      [
+        "Catering invoice",
+        "Showroom etiquette"
+      ],
+      1
+    ],
+    [
+      [
+        "Demo logistics",
+        "Showroom etiquette"
+      ],
+      1
+    ],
+    [
+      [
+        "Reforestation log",
+        "Tool maintenance"
+      ],
+      1
+    ],
+    [
+      [
+        "Reforestation log",
+        "Weather log"
+      ],
+      1
+    ],
+    [
+      [
+        "Tool maintenance",
+        "Weather log"
+      ],
+      1
+    ]
+  ],
+  "doc_frequencies": {
+    "Quarterly memo": 1,
+    "Runbook excerpt": 1,
+    "Office ops": 1,
+    "Training blurb": 1,
+    "Press summary": 1,
+    "Internal roadmap note": 1,
+    "Vendor catalog": 1,
+    "Warehouse checklist": 1,
+    "Safety addendum": 1,
+    "HR bulletin": 1,
+    "Terrain survey": 1,
+    "Engineering decision log": 1,
+    "Procurement newsletter": 1,
+    "Field roster": 1,
+    "Legal scratch pad": 1,
+    "IT ticket digest": 1,
+    "Vendor invoice notes": 1,
+    "Test cell configuration": 1,
+    "Facilities gossip": 1,
+    "Logistics playbook": 1,
+    "Carrier SLA": 1,
+    "Random chatter": 1,
+    "Inventory scan": 1,
+    "Env health incident": 1,
+    "Training attendance": 1,
+    "Design critique notes": 1,
+    "Integration spec (draft)": 1,
+    "Random standup": 1,
+    "Clinic announcements": 1,
+    "Care coordination memo": 1,
+    "Supply cabinet list": 1,
+    "Showroom etiquette": 1,
+    "Demo logistics": 1,
+    "Catering invoice": 1,
+    "Weather log": 1,
+    "Reforestation log": 1,
+    "Tool maintenance": 1
+  }
+}

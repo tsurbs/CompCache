@@ -1,0 +1,220 @@
+[
+  {
+    "question": "Across all orders listed in the passages, how many have status delivered?",
+    "answers": ["2"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "Order log fragment (morning): ORD-1001 customer Lee status shipped carrier FedAlt. ORD-1002 customer Patel status delivered carrier LakePost. ORD-1003 customer Singh status pending payment hold."
+      },
+      {
+        "title": "c1",
+        "text": "Order log fragment (afternoon): ORD-1004 customer Nguyen status delivered carrier LakePost. ORD-1005 customer Gomez status cancelled reason buyer request. ORD-1006 customer Brown status returned awaiting inspection."
+      },
+      {
+        "title": "c2",
+        "text": "Ops note: ignore test harness rows prefixed TEST-. SLA alerts still fire on ORD-1001 until carrier scan uploads."
+      }
+    ]
+  },
+  {
+    "question": "How many distinct engineers touched tickets tagged severity SEV1 in these excerpts?",
+    "answers": ["3"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "Incident 9182 SEV1 on-call handoff: engineer A. Kapoor mitigated cache stampede at 02:10 UTC."
+      },
+      {
+        "title": "c1",
+        "text": "Incident 9182 SEV1: engineer B. Santos shipped hotfix branch rel/cache-guard at 03:40 UTC."
+      },
+      {
+        "title": "c2",
+        "text": "Incident 8401 SEV1 (unrelated billing): engineer C. Nguyen rerouted webhooks; timeline overlaps but ticket id differs."
+      }
+    ]
+  },
+  {
+    "question": "In the budget lines shown, how many line items exceed 50 (thousand USD) in requested amount?",
+    "answers": ["2"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "Sheet excerpt rows: L14 training requested 42; L15 travel requested 58; L16 software requested 15."
+      },
+      {
+        "title": "c1",
+        "text": "More rows: L17 contractors requested 63; L18 office supplies requested 4; L19 cloud credits requested 48."
+      }
+    ]
+  },
+  {
+    "question": "Count how many survey responses in the snippets chose rating excellent.",
+    "answers": ["4"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "Batch A responses: user k1 excellent; user k2 good; user k3 excellent; user k4 fair."
+      },
+      {
+        "title": "c1",
+        "text": "Batch B responses: user k5 poor; user k6 excellent; user k7 excellent; user k8 good."
+      }
+    ]
+  },
+  {
+    "question": "Among machines in these maintenance notes, how many are marked offline?",
+    "answers": ["2"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "Rack east: M-77 online healthy; M-78 online degraded fan; M-79 offline disk predictive failure."
+      },
+      {
+        "title": "c1",
+        "text": "Rack west: M-80 online; M-81 offline power supply swap in progress; M-82 online after firmware."
+      }
+    ]
+  },
+  {
+    "question": "How many experiments in the lab notes used temperature 37C?",
+    "answers": ["3"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "E12 protein fold assay temp 37C replicate 1. E13 lipid probe temp 25C replicate 2."
+      },
+      {
+        "title": "c1",
+        "text": "E14 enzyme stability temp 37C replicate 1. E15 cell viability temp 37C replicate 3 (flagged outlier well H6)."
+      }
+    ]
+  },
+  {
+    "question": "Across the shipment manifests, how many pallets are marked refrigerated?",
+    "answers": ["2"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "Manifest MX-21 pallet P01 dry grocery; pallet P02 refrigerated dairy; pallet P03 dry beverages."
+      },
+      {
+        "title": "c1",
+        "text": "Manifest MX-22 pallet P04 ambient produce; pallet P05 refrigerated vaccines; pallet P06 dry packaging."
+      }
+    ]
+  },
+  {
+    "question": "How many commit hashes mentioned in these digests start with the prefix ab3?",
+    "answers": ["2"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "release/7.1 cherry-picks: ab3f9c2 fixes latency; 91dde00 docs only; fe001aa Revert \"temp flag\"."
+      },
+      {
+        "title": "c1",
+        "text": "hotfix lane: ab31aa0 auth cookie scope; 77aa110 logging noise; cccc000 infra bump."
+      }
+    ]
+  },
+  {
+    "question": "In the classroom schedules below, how many sessions explicitly list room 12B?",
+    "answers": ["3"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "Mon: Algebra II room 12B 09:00; Biology lab room 04; Study hall gym."
+      },
+      {
+        "title": "c1",
+        "text": "Tue: Robotics club room 12B 15:30; Choir room 08; Debate room 12B 17:00."
+      }
+    ]
+  },
+  {
+    "question": "How many unique product SKUs appear in the inventory deltas (ignore SKU comments in parentheses)?",
+    "answers": ["3"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "Delta morning: +12 SKU XTR-01; -3 SKU XTR-01; +5 SKU PLN-44 (legacy tag)."
+      },
+      {
+        "title": "c1",
+        "text": "Delta afternoon: +2 SKU PLN-44; new SKU Z91-aa introduced qty 8; adjustment SKU XTR-01 -1 shrink."
+      }
+    ]
+  },
+  {
+    "question": "From the call logs, how many calls lasted at least 10 minutes?",
+    "answers": ["2"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "Call C001 duration 6m topic billing. Call C002 duration 14m topic migration risks."
+      },
+      {
+        "title": "c1",
+        "text": "Call C003 duration 3m topic password reset. Call C004 duration 11m topic contract renewal."
+      }
+    ]
+  },
+  {
+    "question": "Among cities mentioned as host sites, how many are in Canada (use only the snippets)?",
+    "answers": ["3"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "Meetup hosts: Toronto CA kickoff; Austin US workshops; Vancouver CA deep dive."
+      },
+      {
+        "title": "c1",
+        "text": "Remote-only day replaces Montreal CA lab visit due to weather; Dublin IE still virtual."
+      }
+    ]
+  },
+  {
+    "question": "How many routers in these WAN health summaries show packet loss above 1%?",
+    "answers": ["2"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "POP-East router R1 loss 0.2% latency stable. POP-East router R2 loss 2.1% latency jitter high."
+      },
+      {
+        "title": "c1",
+        "text": "POP-West router W1 loss 0.0% steady. POP-West router W3 loss 1.4% after fiber flap."
+      }
+    ]
+  },
+  {
+    "question": "Count tasks labeled blocking in the sprint blurbs.",
+    "answers": ["3"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "Sprint 44 notes: Task T7 blocking on legal review. Task T8 in progress."
+      },
+      {
+        "title": "c1",
+        "text": "More Sprint 44: Task T9 blocking on vendor API key. Task T10 done. Task T11 blocking on data backfill."
+      }
+    ]
+  },
+  {
+    "question": "How many donors listed contributed at tier gold?",
+    "answers": ["2"],
+    "ctxs": [
+      {
+        "title": "c0",
+        "text": "Campaign table rows: Ava tier silver; Jordan tier gold; Riley tier bronze."
+      },
+      {
+        "title": "c1",
+        "text": "Additional pledges: Sam tier gold; Quinn tier silver; Morgan tier platinum."
+      }
+    ]
+  }
+]

@@ -33,6 +33,9 @@ _INPUTS_SRC = _STANDARD_QA_SRC / "inputs"
 _REALISTIC_QA_SRC = REPO_ROOT / "realistic_qa"
 _REALISTIC_RUNNERS_SRC = _REALISTIC_QA_SRC / "runners"
 _REALISTIC_INPUTS_SRC = _REALISTIC_QA_SRC / "inputs"
+_LONGCTX_EVAL_SRC = REPO_ROOT / "longctx_eval"
+_LONGCTX_RUNNERS_SRC = _LONGCTX_EVAL_SRC / "runners"
+_LONGCTX_INPUTS_SRC = _LONGCTX_EVAL_SRC / "inputs"
 
 # vLLM compile is very slow and memory intensive, limit number of jobs to avoid OOMs
 _BUILD_MAX_JOBS = os.environ.get("MODAL_BUILD_MAX_JOBS", "4")
@@ -44,6 +47,9 @@ _CONTAINER_INPUTS = f"{_CONTAINER_STANDARD_QA}/inputs"
 _CONTAINER_REALISTIC = f"{_CONTAINER_REPO}/realistic_qa"
 _CONTAINER_REALISTIC_RUNNERS = f"{_CONTAINER_REALISTIC}/runners"
 _CONTAINER_REALISTIC_INPUTS = f"{_CONTAINER_REALISTIC}/inputs"
+_CONTAINER_LONGCTX = f"{_CONTAINER_REPO}/longctx_eval"
+_CONTAINER_LONGCTX_RUNNERS = f"{_CONTAINER_LONGCTX}/runners"
+_CONTAINER_LONGCTX_INPUTS = f"{_CONTAINER_LONGCTX}/inputs"
 BLEND_PATTERN = "blend_*.py"
 REALISTIC_SCRIPT = "blend_realistic.py"
 
@@ -82,6 +88,12 @@ def _blend_image() -> modal.Image:
         raise FileNotFoundError(f"Missing realistic_qa/runners: {_REALISTIC_RUNNERS_SRC}")
     if not _REALISTIC_INPUTS_SRC.is_dir():
         raise FileNotFoundError(f"Missing realistic_qa/inputs: {_REALISTIC_INPUTS_SRC}")
+    if not _LONGCTX_EVAL_SRC.is_dir():
+        raise FileNotFoundError(f"Missing longctx_eval: {_LONGCTX_EVAL_SRC}")
+    if not _LONGCTX_RUNNERS_SRC.is_dir():
+        raise FileNotFoundError(f"Missing longctx_eval/runners: {_LONGCTX_RUNNERS_SRC}")
+    if not _LONGCTX_INPUTS_SRC.is_dir():
+        raise FileNotFoundError(f"Missing longctx_eval/inputs: {_LONGCTX_INPUTS_SRC}")
 
     _copy_ignore = (".git", ".venv", "**/__pycache__", "*.pyc", ".DS_Store")
     # Local cmake/build trees should not bust the image hash or overwrite clean builds.
@@ -147,6 +159,12 @@ def _blend_image() -> modal.Image:
         .add_local_dir(
             _REALISTIC_QA_SRC,
             remote_path="/CompCache/realistic_qa",
+            copy=True,
+            ignore=_copy_ignore,
+        )
+        .add_local_dir(
+            _LONGCTX_EVAL_SRC,
+            remote_path="/CompCache/longctx_eval",
             copy=True,
             ignore=_copy_ignore,
         )
@@ -282,13 +300,14 @@ def _invoke_blend_realistic_main() -> None:
         os.chdir(prev)
 
 
-def _run_blend_script(path: Path) -> None:
+def _run_blend_script(path: Path, env: dict[str, str] | None = None) -> None:
     """Run one benchmark with unbuffered Python so logs stream to Modal."""
     print(f"[modal] running {path.name} …", flush=True)
     subprocess.run(
         [sys.executable, "-u", str(path)],
         cwd=_CONTAINER_REPO,
         check=True,
+        env=env,
     )
 
 
@@ -298,6 +317,7 @@ def _collect_result_jsons() -> dict[str, bytes]:
     for inputs_dir, prefix in (
         (Path(_CONTAINER_INPUTS), "standard_qa/inputs/"),
         (Path(_CONTAINER_REALISTIC_INPUTS), "realistic_qa/inputs/"),
+        (Path(_CONTAINER_LONGCTX_INPUTS), "longctx_eval/inputs/"),
     ):
         for pattern in (
             "*_coretrieval.json",
@@ -307,6 +327,13 @@ def _collect_result_jsons() -> dict[str, bytes]:
             "*_ttft_warmup.png",
             "*_ttft_hist.json",
             "*_ttft_hist.png",
+            "*_nith.json",
+            "*_nith.png",
+            "*_nith_heatmap.json",
+            "*_nith_heatmap.png",
+            "*.grid_meta.json",
+            "*_oolong_style.json",
+            "*_oolong_style.png",
         ):
             for p in sorted(inputs_dir.glob(pattern)):
                 rel = prefix + p.name
@@ -316,7 +343,7 @@ def _collect_result_jsons() -> dict[str, bytes]:
 
 
 def _save_results_locally(artifacts: dict[str, bytes]) -> None:
-    """Write downloaded result JSONs under ``standard_qa/inputs/`` or ``realistic_qa/inputs/``."""
+    """Write downloaded artifacts under repo-relative paths (e.g. ``standard_qa/inputs/``)."""
     for name, data in artifacts.items():
         dest = REPO_ROOT / name
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -425,6 +452,51 @@ def run_blend(script: str) -> dict[str, bytes]:
     return _collect_result_jsons()
 
 
+@app.function(**_fn_with_workspace_secrets(_FN))
+def run_longctx_blend(
+    script: str,
+    dataset: str = "",
+    max_ctx_len: int = 0,
+    max_model_len: int = 0,
+    gpu_memory_utilization: float = 0.0,
+) -> dict[str, bytes]:
+    """Run one ``longctx_eval/runners/blend_*.py`` script (CacheBlend vs full prefill).
+
+    Optional kwargs set env vars consumed by the runners (see ``longctx_config``):
+    ``LONGCTX_DATASET``, ``LONGCTX_MAX_CTX_LEN``, ``LONGCTX_MAX_MODEL_LEN``,
+    ``LONGCTX_GPU_MEMORY_UTILIZATION``. Omit or use 0 / empty to keep script defaults.
+    """
+    _maybe_pin_cuda_visible_device0()
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}"
+    if dataset.strip():
+        env["LONGCTX_DATASET"] = dataset.strip()
+    if max_ctx_len > 0:
+        env["LONGCTX_MAX_CTX_LEN"] = str(max_ctx_len)
+    if max_model_len > 0:
+        env["LONGCTX_MAX_MODEL_LEN"] = str(max_model_len)
+    if gpu_memory_utilization > 0:
+        env["LONGCTX_GPU_MEMORY_UTILIZATION"] = str(gpu_memory_utilization)
+
+    ex_dir = Path(_CONTAINER_LONGCTX_RUNNERS)
+    path = ex_dir / script
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    if not path.match(BLEND_PATTERN):
+        raise ValueError(f"Not a blend script: {script}")
+    _mistral_only(path)
+
+    print(
+        f"[modal] longctx {path.name} dataset={dataset or '(script default)'} "
+        f"max_ctx_len={max_ctx_len or '(script default)'} "
+        f"max_model_len={max_model_len or '(auto or script)'} "
+        f"gpu_mem={gpu_memory_utilization or '(script default)'}",
+        flush=True,
+    )
+    _run_blend_script(path, env=env)
+    return _collect_result_jsons()
+
+
 def _realistic_py_path() -> Path:
     return Path(_CONTAINER_REALISTIC_RUNNERS) / REALISTIC_SCRIPT
 
@@ -505,6 +577,57 @@ def main(script: str | None = None, realistic: bool = False):
             artifacts = run_blend.remote(script)
         else:
             artifacts = run_all_blends.remote()
+    _save_results_locally(artifacts)
+
+
+@app.local_entrypoint()
+def longctx_needle(
+    dataset: str = "",
+    max_ctx_len: int = 0,
+    max_model_len: int = 0,
+    gpu_memory_utilization: float = 0.0,
+):
+    """Run needle-in-a-haystack blend on Modal (default: ``needle_haystack_l.json``).
+
+    Examples::
+
+        modal run modal_runner.py::longctx_needle
+        modal run modal_runner.py::longctx_needle --max-ctx-len 16384 --gpu-memory-utilization 0.55
+        modal run modal_runner.py::longctx_needle --dataset longctx_eval/inputs/needle_haystack_s.json
+    """
+    with modal.enable_output():
+        artifacts = run_longctx_blend.remote(
+            "blend_needle_haystack.py",
+            dataset=dataset,
+            max_ctx_len=max_ctx_len,
+            max_model_len=max_model_len,
+            gpu_memory_utilization=gpu_memory_utilization,
+        )
+    _save_results_locally(artifacts)
+
+
+@app.local_entrypoint()
+def longctx_oolong(
+    dataset: str = "",
+    max_ctx_len: int = 0,
+    max_model_len: int = 0,
+    gpu_memory_utilization: float = 0.0,
+):
+    """Run Oolong-style aggregation blend on Modal (default: ``oolong_l.json``).
+
+    Examples::
+
+        modal run modal_runner.py::longctx_oolong
+        modal run modal_runner.py::longctx_oolong --max-ctx-len 12288
+    """
+    with modal.enable_output():
+        artifacts = run_longctx_blend.remote(
+            "blend_oolong.py",
+            dataset=dataset,
+            max_ctx_len=max_ctx_len,
+            max_model_len=max_model_len,
+            gpu_memory_utilization=gpu_memory_utilization,
+        )
     _save_results_locally(artifacts)
 
 
