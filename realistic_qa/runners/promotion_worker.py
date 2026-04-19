@@ -55,7 +55,8 @@ class PromotionWorker(threading.Thread):
         self._run = run_collection_forward
         self.gpu_lock = gpu_lock
         self.queue: "queue.Queue[Optional[PromotionJob]]" = queue.Queue(maxsize=max_queue_size)
-        self._stop = threading.Event()
+        # Must not use ``_stop``: ``threading.Thread`` reserves that name for ``join()``.
+        self._stop_event = threading.Event()
         self._log_prefix = log_prefix
         self.completed = 0
         self.errors = 0
@@ -76,7 +77,7 @@ class PromotionWorker(threading.Thread):
         """Signal shutdown. If ``drain``, wait for pending jobs to complete."""
         if drain:
             self.queue.join()
-        self._stop.set()
+        self._stop_event.set()
         # Poison pill to unblock the get() call.
         try:
             self.queue.put_nowait(None)
@@ -99,7 +100,7 @@ class PromotionWorker(threading.Thread):
     # ---- thread body ------------------------------------------------------
 
     def run(self) -> None:  # pragma: no cover - exercised via integration
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 item = self.queue.get(timeout=0.25)
             except queue.Empty:

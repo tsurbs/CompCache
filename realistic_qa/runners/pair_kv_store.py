@@ -76,12 +76,29 @@ class FullJointPairStore(PairKVStore):
     Eviction is LRU (touched on hit); this makes H4's LRU vs LFU comparison
     a single-flag swap later. Storage shape matches FIFOChunkKVCache:
     per-layer list of ``[K, V]`` with shape ``[seq_len, num_kv_heads, head_size]``.
+
+    ``store_on_cpu=True`` stores joint KVs in RAM and stages them to GPU on ``get``.
     """
 
-    def __init__(self, max_entries: int) -> None:
+    def __init__(
+        self,
+        max_entries: int,
+        *,
+        store_on_cpu: bool = False,
+        cuda_device: int | str | torch.device | None = None,
+    ) -> None:
         if max_entries < 1:
             raise ValueError("max_entries must be >= 1")
         self.max_entries = max_entries
+        self.store_on_cpu = store_on_cpu
+        if cuda_device is None:
+            self._cuda_device = (
+                torch.device("cuda:0")
+                if torch.cuda.is_available()
+                else torch.device("cpu")
+            )
+        else:
+            self._cuda_device = torch.device(cuda_device)
         self._store: "OrderedDict[str, StackedLayers]" = OrderedDict()
         self.hits = 0
         self.misses = 0
@@ -111,14 +128,28 @@ class FullJointPairStore(PairKVStore):
             return None
         self._store.move_to_end(key)
         self.hits += 1
-        return [[t[0].clone(), t[1].clone()] for t in got]
+        return [self._materialize_for_read(t[0], t[1]) for t in got]
+
+    def _materialize_for_read(self, k: torch.Tensor, v: torch.Tensor) -> LayerKV:
+        if self.store_on_cpu:
+            if torch.cuda.is_available() and self._cuda_device.type == "cuda":
+                k = k.to(self._cuda_device, non_blocking=True)
+                v = v.to(self._cuda_device, non_blocking=True)
+            return [k.clone(), v.clone()]
+        return [k.clone(), v.clone()]
 
     def put(self, doc_a: str, doc_b: str, joint_layers: StackedLayers) -> None:
         key = pair_hash_key(doc_a, doc_b)
         if key in self._store:
             self._store.move_to_end(key)
             return
-        frozen: StackedLayers = [[t[0].clone(), t[1].clone()] for t in joint_layers]
+        if self.store_on_cpu:
+            frozen: StackedLayers = [
+                [t[0].detach().cpu().clone(), t[1].detach().cpu().clone()]
+                for t in joint_layers
+            ]
+        else:
+            frozen = [[t[0].clone(), t[1].clone()] for t in joint_layers]
         self._store[key] = frozen
         while len(self._store) > self.max_entries:
             self._store.popitem(last=False)

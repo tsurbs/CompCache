@@ -413,7 +413,11 @@ def run_build_extended_dataset(
 @app.function(**_fn_with_workspace_secrets(_FN))
 def run_blend(script: str) -> dict[str, bytes]:
     _maybe_pin_cuda_visible_device0()
-    os.environ["PYTHONPATH"] = f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}"
+    alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = alloc
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
 
     ex_dir = Path(_CONTAINER_RUNNERS)
     path = ex_dir / script
@@ -505,15 +509,47 @@ def run_realistic_blend(
 @app.function(**_fn_with_workspace_secrets(_FN))
 def run_all_blends() -> dict[str, bytes]:
     _maybe_pin_cuda_visible_device0()
-    os.environ["PYTHONPATH"] = f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}"
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
 
     ex_dir = Path(_CONTAINER_RUNNERS)
-    paths = sorted(ex_dir.glob(BLEND_PATTERN))
+    paths = sorted(
+        p for p in ex_dir.glob(BLEND_PATTERN)
+        if "_comp.py" not in p.name
+    )
     print(f"[modal] run_all_blends: {len(paths)} script(s)", flush=True)
     for path in paths:
         _mistral_only(path)
         _run_blend_script(path)
     return _collect_result_jsons()
+
+
+@app.function(**_fn_with_workspace_secrets(_FN))
+def run_all_blends_comp() -> dict[str, bytes]:
+    """Run every ``standard_qa/runners/blend_*_comp.py`` (CompCache + TTFT plots)."""
+    _maybe_pin_cuda_visible_device0()
+    alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = alloc
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
+
+    ex_dir = Path(_CONTAINER_RUNNERS)
+    paths = sorted(ex_dir.glob("blend_*_comp.py"))
+    print(f"[modal] run_all_blends_comp: {len(paths)} script(s)", flush=True)
+    for path in paths:
+        _mistral_only(path)
+        _run_blend_script(path)
+    return _collect_result_jsons()
+
+
+@app.local_entrypoint()
+def standard_comp():
+    """Run every standard CompCache benchmark (``blend_*_comp.py``); downloads TTFT + coretrieval like FIFO."""
+    with modal.enable_output():
+        artifacts = run_all_blends_comp.remote()
+    _save_results_locally(artifacts)
 
 
 @app.local_entrypoint()

@@ -12,12 +12,32 @@ StackedLayers = List[LayerKV]
 
 
 class FIFOChunkKVCache:
-    """Maps chunk keys to cloned per-layer [K,V] lists; evicts first-inserted entries."""
+    """Maps chunk keys to cloned per-layer [K,V] lists; evicts first-inserted entries.
 
-    def __init__(self, max_entries: int) -> None:
+    ``store_on_cpu=True`` keeps tensors in system RAM and moves them to
+    ``cuda_device`` on ``get`` so GPU memory stays available for vLLM (standard
+    CompCache on ~48GB cards).
+    """
+
+    def __init__(
+        self,
+        max_entries: int,
+        *,
+        store_on_cpu: bool = False,
+        cuda_device: int | str | torch.device | None = None,
+    ) -> None:
         if max_entries < 1:
             raise ValueError("max_entries must be >= 1")
         self.max_entries = max_entries
+        self.store_on_cpu = store_on_cpu
+        if cuda_device is None:
+            self._cuda_device = (
+                torch.device("cuda:0")
+                if torch.cuda.is_available()
+                else torch.device("cpu")
+            )
+        else:
+            self._cuda_device = torch.device(cuda_device)
         self._store: dict[str, StackedLayers] = {}
         self._fifo: deque[str] = deque()
         self.hits = 0
@@ -34,18 +54,32 @@ class FIFOChunkKVCache:
                 del self._store[k]
                 self.evictions += 1
 
+    def _materialize_for_read(self, k: torch.Tensor, v: torch.Tensor) -> LayerKV:
+        if self.store_on_cpu:
+            if torch.cuda.is_available() and self._cuda_device.type == "cuda":
+                k = k.to(self._cuda_device, non_blocking=True)
+                v = v.to(self._cuda_device, non_blocking=True)
+            return [k.clone(), v.clone()]
+        return [k.clone(), v.clone()]
+
     def get(self, key: str) -> StackedLayers | None:
         got = self._store.get(key)
         if got is not None:
             self.hits += 1
-            return [[t[0].clone(), t[1].clone()] for t in got]
+            return [self._materialize_for_read(t[0], t[1]) for t in got]
         self.misses += 1
         return None
 
     def put(self, key: str, layers: StackedLayers) -> None:
         if key in self._store:
             return
-        frozen: StackedLayers = [[t[0].clone(), t[1].clone()] for t in layers]
+        if self.store_on_cpu:
+            frozen = [
+                [t[0].detach().cpu().clone(), t[1].detach().cpu().clone()]
+                for t in layers
+            ]
+        else:
+            frozen = [[t[0].clone(), t[1].clone()] for t in layers]
         self._store[key] = frozen
         self._fifo.append(key)
         self._evict_until_ok()

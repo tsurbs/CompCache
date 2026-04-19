@@ -1,5 +1,6 @@
 import json
 import collections
+import os
 import string
 import re
 import hashlib
@@ -8,80 +9,7 @@ from itertools import combinations
 from pathlib import Path
 from rouge_score import rouge_scorer
 
-
-def save_ttft_histogram(
-    dataset_path: str,
-    ttft_blend: list[float],
-    ttft_full: list[float],
-    *,
-    cached_label: str = "Cached (CacheBlend)",
-    full_label: str = "Full prefill",
-    extra_metadata: dict | None = None,
-) -> tuple[str, str | None]:
-    n = len(ttft_blend)
-    if n == 0 or len(ttft_full) != n:
-        return "", None
-
-    base = Path(dataset_path).resolve()
-    json_path = base.with_name(f"{base.stem}_ttft_hist.json")
-    png_path = base.with_name(f"{base.stem}_ttft_hist.png")
-
-    meta = dict(extra_metadata or {})
-    meta["dataset"] = str(base)
-    meta["n_queries"] = n
-    payload = {
-        "ttft_blend_seconds": [float(x) for x in ttft_blend],
-        "ttft_full_seconds": [float(x) for x in ttft_full],
-        "metadata": meta,
-    }
-    with open(json_path, "w") as f:
-        json.dump(payload, f, indent=2)
-
-    png_written: str | None = None
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
-
-        b_ms = np.asarray(ttft_blend, dtype=float) * 1e3
-        f_ms = np.asarray(ttft_full, dtype=float) * 1e3
-        edges = np.histogram_bin_edges(
-            np.concatenate([b_ms, f_ms]), bins="auto"
-        )
-        fig, ax = plt.subplots(figsize=(8, 5), layout="constrained")
-        ax.hist(
-            b_ms,
-            bins=edges,
-            alpha=0.55,
-            label=cached_label,
-            color="#1f77b4",
-            density=True,
-        )
-        ax.hist(
-            f_ms,
-            bins=edges,
-            alpha=0.55,
-            label=full_label,
-            color="#ff7f0e",
-            density=True,
-        )
-        ax.set_xlabel("TTFT (ms)")
-        ax.set_ylabel("Density")
-        ax.set_title("TTFT: cached vs full prefill")
-        ax.legend(loc="upper right", fontsize=8)
-        ax.grid(True, alpha=0.3)
-        fig.savefig(png_path, dpi=150)
-        plt.close(fig)
-        png_written = str(png_path)
-    except ImportError:
-        pass
-
-    if png_written:
-        print(f"TTFT histogram: {png_written}")
-    print(f"TTFT histogram data: {json_path}")
-    return str(json_path), png_written
+from ttft_reporting import save_ttft_histogram, save_ttft_warmup_plot
 
 def load_dataset(dataset_path):
     print("Loading dataset:", dataset_path)
@@ -326,6 +254,11 @@ def run_blend_eval(
 
     Returns:
         Dict with TTFT lists, metric lists, and co-retrieval statistics.
+
+    Artifacts written next to ``dataset_path`` (same as realistic FIFO naming,
+    with ``CacheBlend (standard)`` labels): ``*_ttft_warmup.json`` / ``.png``,
+    ``*_ttft_hist.json`` / ``.png``, ``*_coretrieval.json``, ``*_scores.json``
+    (scores include ``ttft_blend`` / ``ttft_full``).
     """
     import numpy as np
     import torch
@@ -487,7 +420,30 @@ def run_blend_eval(
         json.dump(coret_stats, f, indent=2, default=str)
     print(f"\nCo-retrieval data saved to {output_path}")
 
-    save_ttft_histogram(dataset_path, ttft_blend, ttft_full)
+    roll_raw = os.environ.get("REALISTIC_TTFT_ROLL_WINDOW", "25")
+    try:
+        roll_window = max(0, int(roll_raw))
+    except ValueError:
+        roll_window = 25
+    std_meta = {"eval": "standard"}
+    save_ttft_warmup_plot(
+        dataset_path,
+        ttft_blend,
+        ttft_full,
+        stream_seed=0,
+        skip_first=0,
+        fifo_stats={},
+        roll_window=roll_window,
+        cached_label="CacheBlend (standard)",
+        name_suffix="",
+    )
+    save_ttft_histogram(
+        dataset_path,
+        ttft_blend,
+        ttft_full,
+        cached_label="CacheBlend (standard)",
+        extra_metadata=std_meta,
+    )
 
     scores_path = Path(dataset_path).resolve()
     scores_path = scores_path.with_name(f"{scores_path.stem}_scores.json")
@@ -497,8 +453,11 @@ def run_blend_eval(
         f"{metric_name}_full": [float(x) for x in metric_full],
         f"mean_{metric_name}_blend": float(np.mean(metric_blend)),
         f"mean_{metric_name}_full": float(np.mean(metric_full)),
+        "ttft_blend": [float(x) for x in ttft_blend],
+        "ttft_full": [float(x) for x in ttft_full],
         "n_queries": len(metric_blend),
         "dataset": str(Path(dataset_path).resolve()),
+        "eval": "standard",
     }
     with open(scores_path, "w") as f:
         json.dump(scores_payload, f, indent=2)
@@ -511,3 +470,137 @@ def run_blend_eval(
         f"{metric_name}_full": metric_full,
         "coretrieval": coret_stats,
     }
+
+
+def run_blend_eval_comp(
+    dataset_path,
+    prefix_prompt,
+    prompt_builder,
+    metric_fn,
+    metric_name,
+    inst_tokens=None,
+    s_end=None,
+    suffix_is_query_len=True,
+    max_ctx_len=None,
+    max_tokens=32,
+    recomp_ratio=None,
+    fast_attention=None,
+    extra_metadata=None,
+    post_process=None,
+    clear_hack_kv=False,
+    model_name="mistralai/Mistral-7B-Instruct-v0.2",
+    gpu_memory_utilization=None,
+    max_model_len=None,
+    num_layers=32,
+    fifo_max_chunks=None,
+    pair_store_capacity=None,
+    promotion_threshold=10,
+    promote_sync=False,
+):
+    """CompCache (standard QA): same metrics and TTFT plots as realistic comp; order matches ``run_blend_eval`` (no shuffle).
+
+    For standard QA, chunk and pair KV copies are kept on **CPU** and moved to
+    GPU only on cache hits (see ``FIFOChunkKVCache(..., store_on_cpu=True)`` in
+    ``comp_blend_eval``), so vLLM is not competing for the same VRAM as hundreds
+    of cached chunks. If ``max_ctx_len`` is omitted, use ``STANDARD_COMP_MAX_CTX_LEN``
+    (default ``4096``); ``0`` disables trimming. ``STANDARD_COMP_FIFO_MAX_CHUNKS``
+    (default ``512``) caps simultaneous cached chunks; ``STANDARD_COMP_PAIR_STORE_CAP``
+    (default ``128``) caps promoted pairs. ``STANDARD_COMP_GPU_MEMORY_UTILIZATION``
+    (default ``0.38``). ``STANDARD_COMP_MAX_MODEL_LEN`` overrides scheduler max; if
+    unset and ``max_ctx_len`` is set, ``max_ctx_len + 2048``.
+    """
+    import sys
+    from pathlib import Path
+
+    effective_max_ctx = max_ctx_len
+    if effective_max_ctx is None:
+        raw = os.environ.get("STANDARD_COMP_MAX_CTX_LEN")
+        if raw is None:
+            effective_max_ctx = 4096
+        elif raw.strip() == "0":
+            effective_max_ctx = None
+        else:
+            try:
+                effective_max_ctx = int(raw)
+            except ValueError:
+                effective_max_ctx = 4096
+
+    effective_gpu = gpu_memory_utilization
+    if effective_gpu is None:
+        raw_g = os.environ.get("STANDARD_COMP_GPU_MEMORY_UTILIZATION")
+        if raw_g is not None:
+            try:
+                effective_gpu = float(raw_g)
+            except ValueError:
+                effective_gpu = 0.38
+        else:
+            effective_gpu = 0.38
+
+    effective_mml = max_model_len
+    if effective_mml is None:
+        raw_m = os.environ.get("STANDARD_COMP_MAX_MODEL_LEN")
+        if raw_m is not None and raw_m.strip() != "0":
+            try:
+                effective_mml = int(raw_m)
+            except ValueError:
+                effective_mml = None
+        if effective_mml is None and effective_max_ctx is not None:
+            effective_mml = effective_max_ctx + 2048
+
+    effective_fifo = fifo_max_chunks
+    if effective_fifo is None:
+        raw_f = os.environ.get("STANDARD_COMP_FIFO_MAX_CHUNKS")
+        if raw_f is not None:
+            try:
+                effective_fifo = max(1, int(raw_f))
+            except ValueError:
+                effective_fifo = 512
+        else:
+            effective_fifo = 512
+
+    effective_pair = pair_store_capacity
+    if effective_pair is None:
+        raw_p = os.environ.get("STANDARD_COMP_PAIR_STORE_CAP")
+        if raw_p is not None:
+            try:
+                effective_pair = max(1, int(raw_p))
+            except ValueError:
+                effective_pair = 128
+        else:
+            effective_pair = 128
+
+    _repo = Path(__file__).resolve().parents[2]
+    _rr = str(_repo / "realistic_qa" / "runners")
+    if _rr not in sys.path:
+        sys.path.insert(0, _rr)
+    from comp_blend_eval import run_blend_eval_comp as _run_comp
+
+    return _run_comp(
+        dataset_path,
+        prefix_prompt,
+        prompt_builder,
+        metric_fn,
+        metric_name,
+        inst_tokens=inst_tokens,
+        s_end=s_end,
+        suffix_is_query_len=suffix_is_query_len,
+        max_ctx_len=effective_max_ctx,
+        max_tokens=max_tokens,
+        recomp_ratio=recomp_ratio,
+        fast_attention=fast_attention,
+        extra_metadata=extra_metadata,
+        post_process=post_process,
+        clear_hack_kv=clear_hack_kv,
+        model_name=model_name,
+        gpu_memory_utilization=effective_gpu,
+        max_model_len=effective_mml,
+        num_layers=num_layers,
+        stream_seed=0,
+        skip_first=0,
+        fifo_max_chunks=effective_fifo,
+        pair_store_capacity=effective_pair,
+        promotion_threshold=promotion_threshold,
+        promote_sync=promote_sync,
+        shuffle_dataset=False,
+        standard_qa=True,
+    )

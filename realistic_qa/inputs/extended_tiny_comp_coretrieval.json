@@ -1,0 +1,75 @@
+{
+  "alpha": null,
+  "r_squared": null,
+  "n_queries": 2,
+  "n_unique_docs": 3,
+  "n_unique_pairs": 2,
+  "top_pairs": [
+    [
+      [
+        "25b9af528738f668",
+        "70f361a4847702f9"
+      ],
+      1
+    ],
+    [
+      [
+        "04021c6f79aea71e",
+        "25b9af528738f668"
+      ],
+      1
+    ]
+  ],
+  "doc_frequencies": {
+    "25b9af528738f668": 2,
+    "70f361a4847702f9": 1,
+    "04021c6f79aea71e": 1
+  },
+  "fifo_kv": {
+    "hits": 2,
+    "misses": 6,
+    "evictions": 0,
+    "entries": 6
+  },
+  "pair_store": {
+    "hits": 0,
+    "misses": 0,
+    "evictions": 0,
+    "entries": 0,
+    "capacity": 256,
+    "kind": "full_joint"
+  },
+  "promotion_worker": {
+    "completed": 0,
+    "errors": 0,
+    "dropped": 0,
+    "pending": 0,
+    "running": false
+  },
+  "logger": {
+    "promotion_threshold": 10,
+    "queries_seen": 2,
+    "n_unique_pairs": 2,
+    "n_flagged": 0,
+    "top_pairs": [
+      [
+        [
+          "25b9af528738f668",
+          "70f361a4847702f9"
+        ],
+        1
+      ],
+      [
+        [
+          "04021c6f79aea71e",
+          "25b9af528738f668"
+        ],
+        1
+      ]
+    ]
+  },
+  "stream_seed": 34,
+  "skip_first": 0,
+  "promotion_threshold": 10,
+  "promote_sync": false
+}

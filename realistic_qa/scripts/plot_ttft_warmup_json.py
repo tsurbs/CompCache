@@ -27,24 +27,30 @@ def main() -> None:
     data = json.loads(args.json_path.read_text())
     ttft_b = data["ttft_blend_seconds"]
     ttft_f = data["ttft_full_seconds"]
+    meta = data.get("metadata") or {}
+    cached_label = meta.get("cached_label", "CacheBlend (FIFO KV)")
+    roll_cached = cached_label.split(" (", 1)[0]
     n = len(ttft_b)
     out = args.out or args.json_path.with_suffix(".png")
     if out.suffix.lower() != ".png":
         out = out.with_suffix(".png")
 
+    import matplotlib
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import numpy as np
 
     x = np.arange(n, dtype=float)
     fig, ax = plt.subplots(figsize=(10, 5), layout="constrained")
-    ax.plot(x, np.asarray(ttft_b, dtype=float) * 1e3, label="CacheBlend (FIFO KV)", lw=0.8, alpha=0.85)
+    ax.plot(x, np.asarray(ttft_b, dtype=float) * 1e3, label=cached_label, lw=0.8, alpha=0.85)
     ax.plot(x, np.asarray(ttft_f, dtype=float) * 1e3, label="Full prefill", lw=0.8, alpha=0.85)
 
     w = args.roll_window
     if w > 1 and n >= w:
         k = np.ones(w, dtype=float) / w
         xs = np.arange(w - 1, n, dtype=float)
-        ax.plot(xs, np.convolve(ttft_b, k, mode="valid") * 1e3, label=f"CacheBlend ({w}-query rolling mean)", lw=1.5)
+        ax.plot(xs, np.convolve(ttft_b, k, mode="valid") * 1e3, label=f"{roll_cached} ({w}-query rolling mean)", lw=1.5)
         ax.plot(xs, np.convolve(ttft_f, k, mode="valid") * 1e3, label=f"Full prefill ({w}-query rolling mean)", lw=1.5)
 
     ax.set_xlabel("Query index (shuffled stream order)")
