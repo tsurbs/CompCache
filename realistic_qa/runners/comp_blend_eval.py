@@ -19,7 +19,7 @@ from ttft_reporting import save_ttft_histogram, save_ttft_warmup_plot  # noqa: E
 from co_retrieval_logger import CoRetrievalLogger  # noqa: E402
 from composition_cache import CompositionCache  # noqa: E402
 from kv_fifo_cache import FIFOChunkKVCache  # noqa: E402
-from pair_kv_store import FullJointPairStore  # noqa: E402
+from pair_kv_store import FullJointPairStore, SparseDeltaPairStore  # noqa: E402
 from promotion_worker import PromotionWorker  # noqa: E402
 
 
@@ -57,6 +57,8 @@ def run_blend_eval_comp(
     skip_first: int = 0,
     fifo_max_chunks: int = 10_000,
     pair_store_capacity: int = 256,
+    pair_store_kind: str = "full",
+    delta_top_k_ratio: float = 0.1,
     promotion_threshold: int = 10,
     promote_sync: bool = False,
     shuffle_dataset: bool = True,
@@ -110,10 +112,23 @@ def run_blend_eval_comp(
         fifo_max_chunks,
         store_on_cpu=standard_qa,
     )
-    pair_store = FullJointPairStore(
-        pair_store_capacity,
-        store_on_cpu=standard_qa,
-    )
+    kind_norm = (pair_store_kind or "full").lower()
+    if kind_norm in ("full", "full_joint", "joint"):
+        pair_store = FullJointPairStore(
+            pair_store_capacity,
+            store_on_cpu=standard_qa,
+        )
+    elif kind_norm in ("delta", "sparse", "sparse_delta"):
+        pair_store = SparseDeltaPairStore(
+            pair_store_capacity,
+            top_k_ratio=delta_top_k_ratio,
+            store_on_cpu=standard_qa,
+        )
+    else:
+        raise ValueError(
+            f"unknown pair_store_kind={pair_store_kind!r}; "
+            "expected 'full' or 'delta'"
+        )
     logger = CoRetrievalLogger(promotion_threshold=promotion_threshold)
     tracker = CoRetrievalTracker()
 
@@ -289,6 +304,8 @@ def run_blend_eval_comp(
         "skip_first": skip_first,
         "promotion_threshold": promotion_threshold,
         "promote_sync": promote_sync,
+        "pair_store_kind": kind_norm,
+        "delta_top_k_ratio": delta_top_k_ratio,
     })
 
     output_path = dataset_path.replace(".json", "_comp_coretrieval.json")
@@ -315,6 +332,8 @@ def run_blend_eval_comp(
         "stream_seed": stream_seed,
         "skip_first": skip_first,
         "promotion_threshold": promotion_threshold,
+        "pair_store_kind": kind_norm,
+        "delta_top_k_ratio": delta_top_k_ratio,
     }
     if standard_qa:
         scores_payload["eval"] = "standard_comp"

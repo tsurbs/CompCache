@@ -150,13 +150,18 @@ class CompositionCache:
                     tokens_b=doc_chunk_ids[1 + match.positions[1]],
                     chunk_past_key_values=chunk_past_key_values,
                     stats=stats,
+                    chunk_cache_key_fn=chunk_cache_key_fn,
                 )
 
             if consumed_pair:
                 i += 2
                 continue
 
-            # Single chunk (either unmatched or pair cache miss).
+            # Single chunk (either unmatched or pair cache miss). If the pair
+            # was reordered adjacent but its cache missed, we need to fall
+            # back to per-chunk assembly for BOTH positions — handled
+            # naturally by the while-loop: this iteration processes pos,
+            # the next iteration processes match.positions[1].
             tokens = doc_chunk_ids[1 + pos]
             layer_kvs = self._get_or_collect_individual(
                 key=chunk_cache_key_fn(tokens),
@@ -197,6 +202,7 @@ class CompositionCache:
             input_ids.extend(chunk[strip:])
 
         # 7. Enqueue promotion jobs for pairs that just hit the threshold on this query.
+        needs_individuals = getattr(self.pair_store, "needs_individuals", False)
         if newly_ready and self.worker is not None:
             for doc_a, doc_b in newly_ready:
                 if self.pair_store.contains(doc_a, doc_b):
@@ -209,7 +215,25 @@ class CompositionCache:
                     # in the current retrieval; we rely on a future co-retrieval where
                     # they both appear. Skip rather than snapshotting now.
                     continue
-                job = PromotionJob(doc_a, doc_b, tokens_a, tokens_b)
+                ind_a: Optional[StackedLayers] = None
+                ind_b: Optional[StackedLayers] = None
+                if needs_individuals:
+                    # Delta stores need the individuals to compute Δ at put-time.
+                    # We just assembled this query, so both should be warm in
+                    # the FIFO; if not, skip the promotion and wait for a
+                    # future co-retrieval.
+                    ind_a = self.individual_cache.get(chunk_cache_key_fn(tokens_a))
+                    ind_b = self.individual_cache.get(chunk_cache_key_fn(tokens_b))
+                    if ind_a is None or ind_b is None:
+                        continue
+                job = PromotionJob(
+                    doc_a,
+                    doc_b,
+                    tokens_a,
+                    tokens_b,
+                    individual_a=ind_a,
+                    individual_b=ind_b,
+                )
                 if self.promote_sync:
                     self.worker.promote_sync(job)
                     stats.promotions_enqueued += 1
@@ -228,10 +252,30 @@ class CompositionCache:
         tokens_b: List[int],
         chunk_past_key_values: StackedLayers,
         stats: QueryStats,
+        chunk_cache_key_fn: Callable[[List[int]], str],
     ) -> bool:
-        """Attempt pair cache hit; return True if we appended the joint KV."""
+        """Attempt pair cache hit; return True if we appended the joint KV.
+
+        For delta-backed stores (``pair_store.needs_individuals``), we fetch
+        the individuals from the FIFO and pass them in so the store can
+        reconstruct the joint tensor. On a reconstruction miss we fall
+        through to individual assembly.
+        """
         doc_a, doc_b = match.pair_key
-        joint = self.pair_store.get(doc_a, doc_b)
+        if getattr(self.pair_store, "needs_individuals", False):
+            ind_a = self.individual_cache.get(chunk_cache_key_fn(tokens_a))
+            ind_b = self.individual_cache.get(chunk_cache_key_fn(tokens_b))
+            if ind_a is None or ind_b is None:
+                # Can't reconstruct without individuals. Fall back to
+                # per-chunk assembly (the two single-chunk passes will
+                # repopulate the FIFO).
+                stats.pair_misses += 1
+                return False
+            joint = self.pair_store.get(
+                doc_a, doc_b, individual_a=ind_a, individual_b=ind_b
+            )
+        else:
+            joint = self.pair_store.get(doc_a, doc_b)
         if joint is None:
             stats.pair_misses += 1
             return False

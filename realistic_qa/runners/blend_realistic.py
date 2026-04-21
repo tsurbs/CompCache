@@ -427,13 +427,18 @@ def main() -> None:
         pair_cap = int(os.environ.get("REALISTIC_PAIR_STORE_CAP", "256"))
         prom_t = int(os.environ.get("REALISTIC_PROMOTION_THRESHOLD", "10"))
         prom_sync = os.environ.get("REALISTIC_PROMOTE_SYNC", "0") == "1"
+        pair_kind = os.environ.get("REALISTIC_PAIR_STORE_KIND", "full").lower()
+        delta_ratio = float(os.environ.get("REALISTIC_DELTA_TOP_K_RATIO", "0.1"))
         print(
             f"[mode=comp] pair_store_cap={pair_cap} "
-            f"promotion_threshold={prom_t} promote_sync={prom_sync}"
+            f"promotion_threshold={prom_t} promote_sync={prom_sync} "
+            f"pair_store_kind={pair_kind} delta_top_k_ratio={delta_ratio}"
         )
         run_blend_eval_comp(
             **common_kwargs,
             pair_store_capacity=pair_cap,
+            pair_store_kind=pair_kind,
+            delta_top_k_ratio=delta_ratio,
             promotion_threshold=prom_t,
             promote_sync=prom_sync,
         )

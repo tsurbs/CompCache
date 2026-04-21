@@ -1,13 +1,24 @@
 """Store for joint KV caches of promoted document pairs.
 
 A pair is keyed by a canonical (sorted) tuple of document identifiers so that
-(d_a, d_b) and (d_b, d_a) hash to the same entry. The concrete full-joint
-implementation stores the entire concatenation KV; a future sparse-delta
-implementation can plug in behind the same interface.
+(d_a, d_b) and (d_b, d_a) hash to the same entry. Two concrete implementations
+ship in this module:
+
+* :class:`FullJointPairStore` — the §3.1 store: keeps the whole
+  concatenation KV tensor per pair. Fast path, high memory.
+* :class:`SparseDeltaPairStore` — the §3.2 store: keeps only
+  ``Δ = joint_KV - cat(individual_KV(a), individual_KV(b))`` sparsified
+  to the top-K positions (by combined ‖ΔK‖+‖ΔV‖ per layer). The caller
+  passes the current individual caches on ``get``/``put`` so the store
+  can reconstruct the joint on demand.
+
+Both implementations share the same :class:`PairKVStore` interface so the
+composition-cache assembler treats them interchangeably.
 """
 from __future__ import annotations
 
 import hashlib
+import math
 from abc import ABC, abstractmethod
 from collections import OrderedDict, deque
 from typing import Iterable, List, Optional, Tuple
@@ -42,7 +53,16 @@ class PairKVStore(ABC):
 
     Implementations differ on what they store (full joint KV vs sparse delta)
     but all callers should only interact through these methods.
+
+    Subclasses may set ``needs_individuals = True`` to signal that the
+    composition cache must pass the individual chunk KVs on both
+    :meth:`get` and :meth:`put`; the orchestrator inspects this flag and
+    fetches the individuals from the FIFO (or runs a forward) before
+    calling. Full-joint stores leave it ``False`` and the individuals are
+    ignored.
     """
+
+    needs_individuals: bool = False
 
     @abstractmethod
     def contains(self, doc_a: str, doc_b: str) -> bool: ...
@@ -58,13 +78,24 @@ class PairKVStore(ABC):
     ) -> Optional[StackedLayers]:
         """Return the joint per-layer (K, V) for the canonical pair order.
 
-        A delta-store implementation may use the individual caches as base
+        A delta-store implementation uses the individual caches as base
         tensors onto which it adds the stored delta; the full-joint store
         ignores them.
         """
 
     @abstractmethod
-    def put(self, doc_a: str, doc_b: str, joint_layers: StackedLayers) -> None: ...
+    def put(
+        self,
+        doc_a: str,
+        doc_b: str,
+        joint_layers: StackedLayers,
+        *,
+        individual_a: Optional[StackedLayers] = None,
+        individual_b: Optional[StackedLayers] = None,
+    ) -> None:
+        """Store ``joint_layers`` for the pair. Delta stores additionally
+        require the individual KVs so they can persist the delta, not the
+        whole joint."""
 
     @abstractmethod
     def stats(self) -> dict: ...
@@ -138,7 +169,18 @@ class FullJointPairStore(PairKVStore):
             return [k.clone(), v.clone()]
         return [k.clone(), v.clone()]
 
-    def put(self, doc_a: str, doc_b: str, joint_layers: StackedLayers) -> None:
+    def put(
+        self,
+        doc_a: str,
+        doc_b: str,
+        joint_layers: StackedLayers,
+        *,
+        individual_a: Optional[StackedLayers] = None,
+        individual_b: Optional[StackedLayers] = None,
+    ) -> None:
+        # Full-joint store ignores individuals; they are accepted so the
+        # orchestrator can call put() uniformly across store kinds.
+        del individual_a, individual_b
         key = pair_hash_key(doc_a, doc_b)
         if key in self._store:
             self._store.move_to_end(key)
@@ -166,4 +208,243 @@ class FullJointPairStore(PairKVStore):
             "entries": len(self._store),
             "capacity": self.max_entries,
             "kind": "full_joint",
+        }
+
+
+# One layer's sparse delta entry:
+#   indices : LongTensor[K]             — positions into [0, L_a + L_b)
+#   dK      : Tensor[K, n_kv_heads, hd] — joint_K[pos] - base_K[pos]
+#   dV      : Tensor[K, n_kv_heads, hd] — joint_V[pos] - base_V[pos]
+LayerDelta = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+StackedDeltas = List[LayerDelta]
+
+
+class SparseDeltaPairStore(PairKVStore):
+    """Stores ``Δ = joint_KV − cat(individual_KV_a, individual_KV_b)`` sparsified
+    to the top-K positions per layer (Proposal §3.2).
+
+    For each layer we keep only the rows (seq-positions) where the combined
+    score ``‖ΔK[pos]‖_2 + ‖ΔV[pos]‖_2`` is largest. ``K = max(1, ceil(
+    top_k_ratio × (L_a + L_b)))``. On :meth:`get` the store reconstructs
+    the joint tensor as ``base = cat(ind_a, ind_b); base.index_add_(0,
+    indices, delta)`` — so the caller must pass the current individual
+    KVs (pulled from the FIFO or just collected).
+
+    ``needs_individuals = True`` tells the composition orchestrator it
+    must supply ``individual_a`` / ``individual_b`` on both :meth:`get`
+    and :meth:`put`. If either is missing the store raises on ``put``
+    (callers should check with :attr:`needs_individuals` or the FIFO
+    first) and returns ``None`` on ``get`` (treated as a miss).
+
+    Eviction is LRU (touched on hit), matching :class:`FullJointPairStore`.
+    """
+
+    needs_individuals: bool = True
+
+    def __init__(
+        self,
+        max_entries: int,
+        *,
+        top_k_ratio: float = 0.1,
+        store_on_cpu: bool = False,
+        cuda_device: int | str | torch.device | None = None,
+    ) -> None:
+        if max_entries < 1:
+            raise ValueError("max_entries must be >= 1")
+        if not 0.0 < top_k_ratio <= 1.0:
+            raise ValueError("top_k_ratio must be in (0, 1]")
+        self.max_entries = max_entries
+        self.top_k_ratio = float(top_k_ratio)
+        self.store_on_cpu = store_on_cpu
+        if cuda_device is None:
+            self._cuda_device = (
+                torch.device("cuda:0")
+                if torch.cuda.is_available()
+                else torch.device("cpu")
+            )
+        else:
+            self._cuda_device = torch.device(cuda_device)
+        self._store: "OrderedDict[str, StackedDeltas]" = OrderedDict()
+        self._seq_lens: "dict[str, int]" = {}  # key → L_a + L_b
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
+        self.reconstruct_failures = 0  # shape mismatch on get
+
+    def __len__(self) -> int:
+        return len(self._store)
+
+    def __contains__(self, key_tuple: Tuple[str, str]) -> bool:
+        return self.contains(key_tuple[0], key_tuple[1])
+
+    def contains(self, doc_a: str, doc_b: str) -> bool:
+        return pair_hash_key(doc_a, doc_b) in self._store
+
+    # ---- get -------------------------------------------------------------
+
+    def get(
+        self,
+        doc_a: str,
+        doc_b: str,
+        *,
+        individual_a: Optional[StackedLayers] = None,
+        individual_b: Optional[StackedLayers] = None,
+    ) -> Optional[StackedLayers]:
+        key = pair_hash_key(doc_a, doc_b)
+        entry = self._store.get(key)
+        if entry is None:
+            self.misses += 1
+            return None
+        if individual_a is None or individual_b is None:
+            # Cannot reconstruct without base tensors. Treat as a miss so
+            # the orchestrator falls back to individual assembly.
+            self.misses += 1
+            return None
+        # Canonicalize the caller's individuals to the stored order.
+        (canon_a, _canon_b) = canonical_pair_key(doc_a, doc_b)
+        if canon_a == doc_a:
+            base_a, base_b = individual_a, individual_b
+        else:
+            base_a, base_b = individual_b, individual_a
+
+        expected_len = self._seq_lens.get(key)
+        if expected_len is None:
+            self.misses += 1
+            return None
+        joint_layers: StackedLayers = []
+        try:
+            for layer_idx, (indices, dK, dV) in enumerate(entry):
+                ka = base_a[layer_idx][0]
+                va = base_a[layer_idx][1]
+                kb = base_b[layer_idx][0]
+                vb = base_b[layer_idx][1]
+                # The individuals may live on any device/dtype; match the
+                # delta against them.
+                device = ka.device
+                dtype = ka.dtype
+                joint_k = torch.cat((ka, kb), dim=0).clone()
+                joint_v = torch.cat((va, vb), dim=0).clone()
+                if joint_k.shape[0] != expected_len:
+                    raise RuntimeError(
+                        f"individual lengths don't match stored pair "
+                        f"({joint_k.shape[0]} vs {expected_len})"
+                    )
+                idx = indices.to(device=device, dtype=torch.long, non_blocking=True)
+                dk_l = dK.to(device=device, dtype=dtype, non_blocking=True)
+                dv_l = dV.to(device=device, dtype=dtype, non_blocking=True)
+                joint_k.index_add_(0, idx, dk_l)
+                joint_v.index_add_(0, idx, dv_l)
+                joint_layers.append([joint_k, joint_v])
+        except Exception:
+            self.reconstruct_failures += 1
+            self.misses += 1
+            return None
+        self._store.move_to_end(key)
+        self.hits += 1
+        return joint_layers
+
+    # ---- put -------------------------------------------------------------
+
+    def put(
+        self,
+        doc_a: str,
+        doc_b: str,
+        joint_layers: StackedLayers,
+        *,
+        individual_a: Optional[StackedLayers] = None,
+        individual_b: Optional[StackedLayers] = None,
+    ) -> None:
+        if individual_a is None or individual_b is None:
+            raise ValueError(
+                "SparseDeltaPairStore.put requires individual_a and individual_b"
+            )
+        key = pair_hash_key(doc_a, doc_b)
+        if key in self._store:
+            self._store.move_to_end(key)
+            return
+
+        # Canonicalize individuals to match the stored (sorted) order.
+        (canon_a, _canon_b) = canonical_pair_key(doc_a, doc_b)
+        if canon_a == doc_a:
+            base_a, base_b = individual_a, individual_b
+        else:
+            base_a, base_b = individual_b, individual_a
+
+        if len(joint_layers) != len(base_a) or len(joint_layers) != len(base_b):
+            raise ValueError("layer count mismatch between joint and individuals")
+
+        la = base_a[0][0].shape[0]
+        lb = base_b[0][0].shape[0]
+        total = la + lb
+        if joint_layers[0][0].shape[0] != total:
+            raise ValueError(
+                f"joint length {joint_layers[0][0].shape[0]} != "
+                f"L_a+L_b={total}"
+            )
+
+        k_positions = max(1, math.ceil(self.top_k_ratio * total))
+        k_positions = min(k_positions, total)
+
+        deltas: StackedDeltas = []
+        for layer_idx, (jk, jv) in enumerate(joint_layers):
+            ka = base_a[layer_idx][0]
+            va = base_a[layer_idx][1]
+            kb = base_b[layer_idx][0]
+            vb = base_b[layer_idx][1]
+            base_k = torch.cat((ka, kb), dim=0)
+            base_v = torch.cat((va, vb), dim=0)
+            # Match device/dtype of joint for the subtraction; individuals
+            # may have been written to the FIFO on a different device.
+            base_k = base_k.to(device=jk.device, dtype=jk.dtype)
+            base_v = base_v.to(device=jv.device, dtype=jv.dtype)
+            dK = jk - base_k
+            dV = jv - base_v
+
+            # Score per seq position: ‖ΔK‖_2 + ‖ΔV‖_2 over (heads, head_dim).
+            score = (
+                dK.float().pow(2).sum(dim=(1, 2)).sqrt()
+                + dV.float().pow(2).sum(dim=(1, 2)).sqrt()
+            )
+            if k_positions >= total:
+                indices = torch.arange(total, device=score.device, dtype=torch.long)
+            else:
+                indices = torch.topk(score, k=k_positions, largest=True).indices
+                indices, _ = torch.sort(indices)
+            dK_top = dK.index_select(0, indices).contiguous()
+            dV_top = dV.index_select(0, indices).contiguous()
+            idx_store = indices.to(dtype=torch.long)
+
+            if self.store_on_cpu:
+                deltas.append((
+                    idx_store.detach().cpu().clone(),
+                    dK_top.detach().cpu().clone(),
+                    dV_top.detach().cpu().clone(),
+                ))
+            else:
+                deltas.append((
+                    idx_store.detach().clone(),
+                    dK_top.detach().clone(),
+                    dV_top.detach().clone(),
+                ))
+
+        self._store[key] = deltas
+        self._seq_lens[key] = total
+        while len(self._store) > self.max_entries:
+            evicted_key, _ = self._store.popitem(last=False)
+            self._seq_lens.pop(evicted_key, None)
+            self.evictions += 1
+
+    def keys(self) -> Iterable[str]:
+        return self._store.keys()
+
+    def stats(self) -> dict:
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "evictions": self.evictions,
+            "reconstruct_failures": self.reconstruct_failures,
+            "entries": len(self._store),
+            "capacity": self.max_entries,
+            "top_k_ratio": self.top_k_ratio,
+            "kind": "sparse_delta",
         }

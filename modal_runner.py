@@ -445,19 +445,26 @@ def run_realistic_blend(
     gpu_memory_utilization: float = 0.45,
     mode: str = "fifo",
     pair_store_capacity: int = 256,
+    pair_store_kind: str = "full",
+    delta_top_k_ratio: float = 0.1,
     promotion_threshold: int = 10,
     promote_sync: bool = False,
 ) -> dict[str, bytes]:
     """CacheBlend evaluation on a realistic_qa JSON (see ``blend_realistic.py``).
 
     ``mode=fifo`` reproduces the baseline FIFO path; ``mode=comp`` enables
-    composition-aware pair KV caching (Proposal §3.1): a ``PairKVStore`` +
-    async ``PromotionWorker`` that materializes joint KV for frequently
-    co-retrieved document pairs. ``pair_store_capacity`` is the max number of
-    promoted pairs held at once; ``promotion_threshold`` is the co-retrieval
-    count at which a pair gets enqueued for async promotion; ``promote_sync``
-    forces promotion on the triggering query (single-threaded, deterministic
-    microbench mode).
+    composition-aware pair KV caching (Proposal §3.1/§3.2): a ``PairKVStore``
+    + async ``PromotionWorker`` that materializes joint KV for frequently
+    co-retrieved document pairs. ``pair_store_capacity`` is the max number
+    of promoted pairs held at once; ``promotion_threshold`` is the
+    co-retrieval count at which a pair gets enqueued for async promotion;
+    ``promote_sync`` forces promotion on the triggering query
+    (single-threaded, deterministic microbench mode).
+    ``pair_store_kind="full"`` (§3.1) stores the whole joint KV;
+    ``pair_store_kind="delta"`` (§3.2) stores only the sparse
+    ``Δ = joint - cat(individual_a, individual_b)`` retaining
+    ``delta_top_k_ratio`` of positions per layer (lower memory, tiny
+    reconstruction noise).
 
     ``max_ctx_len`` trims passage chunks (middle-out) so long multi-hop prompts fit
     on a ~48GB GPU; use 0 to disable. ``max_model_len`` caps vLLM context (scheduler
@@ -477,6 +484,8 @@ def run_realistic_blend(
     os.environ["REALISTIC_GPU_MEMORY_UTILIZATION"] = str(gpu_memory_utilization)
     os.environ["REALISTIC_MODE"] = mode
     os.environ["REALISTIC_PAIR_STORE_CAP"] = str(pair_store_capacity)
+    os.environ["REALISTIC_PAIR_STORE_KIND"] = pair_store_kind
+    os.environ["REALISTIC_DELTA_TOP_K_RATIO"] = str(delta_top_k_ratio)
     os.environ["REALISTIC_PROMOTION_THRESHOLD"] = str(promotion_threshold)
     os.environ["REALISTIC_PROMOTE_SYNC"] = "1" if promote_sync else "0"
     if max_ctx_len > 0:
@@ -498,7 +507,9 @@ def run_realistic_blend(
         f"skip_first={skip_first} max_ctx_len={max_ctx_len} "
         f"max_model_len={max_model_len or '(auto or HF)'} "
         f"gpu_memory_utilization={gpu_memory_utilization} "
-        f"pair_store_cap={pair_store_capacity} promotion_threshold={promotion_threshold} "
+        f"pair_store_cap={pair_store_capacity} pair_store_kind={pair_store_kind} "
+        f"delta_top_k_ratio={delta_top_k_ratio} "
+        f"promotion_threshold={promotion_threshold} "
         f"promote_sync={promote_sync}",
         flush=True,
     )
@@ -575,6 +586,8 @@ def realistic(
     gpu_memory_utilization: float = 0.45,
     mode: str = "fifo",
     pair_store_capacity: int = 256,
+    pair_store_kind: str = "full",
+    delta_top_k_ratio: float = 0.1,
     promotion_threshold: int = 10,
     promote_sync: bool = False,
 ):
@@ -605,6 +618,8 @@ def realistic(
             gpu_memory_utilization=gpu_memory_utilization,
             mode=mode,
             pair_store_capacity=pair_store_capacity,
+            pair_store_kind=pair_store_kind,
+            delta_top_k_ratio=delta_top_k_ratio,
             promotion_threshold=promotion_threshold,
             promote_sync=promote_sync,
         )

@@ -17,19 +17,37 @@ import queue
 import threading
 from typing import Callable, List, Optional
 
-from pair_kv_store import PairKVStore
+from pair_kv_store import PairKVStore, StackedLayers
 
 
 class PromotionJob:
-    __slots__ = ("doc_a", "doc_b", "tokens_a", "tokens_b")
+    __slots__ = (
+        "doc_a",
+        "doc_b",
+        "tokens_a",
+        "tokens_b",
+        "individual_a",
+        "individual_b",
+    )
 
     def __init__(
-        self, doc_a: str, doc_b: str, tokens_a: List[int], tokens_b: List[int]
+        self,
+        doc_a: str,
+        doc_b: str,
+        tokens_a: List[int],
+        tokens_b: List[int],
+        *,
+        individual_a: Optional[StackedLayers] = None,
+        individual_b: Optional[StackedLayers] = None,
     ) -> None:
         self.doc_a = doc_a
         self.doc_b = doc_b
         self.tokens_a = list(tokens_a)
         self.tokens_b = list(tokens_b)
+        # Delta stores need the individual per-chunk KVs to compute the
+        # delta at put-time. Full-joint stores ignore these.
+        self.individual_a = individual_a
+        self.individual_b = individual_b
 
 
 class PromotionWorker(threading.Thread):
@@ -118,7 +136,13 @@ class PromotionWorker(threading.Thread):
         try:
             with self.gpu_lock:
                 joint_layers = self._run(concat)
-            self.pair_store.put(job.doc_a, job.doc_b, joint_layers)
+            self.pair_store.put(
+                job.doc_a,
+                job.doc_b,
+                joint_layers,
+                individual_a=job.individual_a,
+                individual_b=job.individual_b,
+            )
             self.completed += 1
         except Exception as exc:  # pragma: no cover - logged at runtime
             self.errors += 1

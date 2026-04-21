@@ -9,7 +9,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runners"))
 
-from pair_kv_store import FullJointPairStore  # noqa: E402
+from pair_kv_store import FullJointPairStore, SparseDeltaPairStore  # noqa: E402
 from promotion_worker import PromotionJob, PromotionWorker  # noqa: E402
 
 
@@ -88,6 +88,55 @@ def test_gpu_lock_is_acquired_during_forward():
     t.join(timeout=2.0)
     assert observed_lock_state == [True]  # lock was held during the forward
     assert store.contains("a", "b")
+
+
+def test_promote_sync_passes_individuals_to_delta_store():
+    """PromotionWorker must forward individuals to a needs_individuals store."""
+    store = SparseDeltaPairStore(max_entries=2, top_k_ratio=1.0)
+    lock = threading.Lock()
+    tokens_a = [1, 2, 3]
+    tokens_b = [4, 5]
+    la, lb = len(tokens_a), len(tokens_b)
+
+    def stub_forward(concat_tokens):
+        # Joint = cat(individual_a, individual_b) + small perturbation;
+        # here we just return sentinel tensors with the right shape.
+        n = len(concat_tokens)
+        return [
+            [
+                torch.full((n, 2, 4), 7.0, dtype=torch.float32),
+                torch.full((n, 2, 4), -7.0, dtype=torch.float32),
+            ]
+            for _ in range(3)
+        ]
+
+    individual_a = [
+        [torch.full((la, 2, 4), 1.0), torch.full((la, 2, 4), -1.0)]
+        for _ in range(3)
+    ]
+    individual_b = [
+        [torch.full((lb, 2, 4), 2.0), torch.full((lb, 2, 4), -2.0)]
+        for _ in range(3)
+    ]
+
+    worker = PromotionWorker(store, stub_forward, lock)
+    job = PromotionJob(
+        "d_a",
+        "d_b",
+        tokens_a,
+        tokens_b,
+        individual_a=individual_a,
+        individual_b=individual_b,
+    )
+    worker.promote_sync(job)
+    assert store.contains("d_a", "d_b")
+    # Round-trip check using the same individuals.
+    got = store.get("d_a", "d_b", individual_a=individual_a, individual_b=individual_b)
+    assert got is not None
+    # At ratio=1.0 we expect exact reconstruction → all sevens.
+    for k, v in got:
+        assert torch.all(k == 7.0)
+        assert torch.all(v == -7.0)
 
 
 def test_failed_forward_increments_errors():
