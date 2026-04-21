@@ -302,13 +302,20 @@ def _collect_result_jsons() -> dict[str, bytes]:
         for pattern in (
             "*_coretrieval.json",
             "*_comp_coretrieval.json",
+            "*_3way*_coretrieval.json",
             "*_scores.json",
             "*_comp_scores.json",
+            "*_3way*_scores.json",
             "*_synthetic_zipf.json",
             "*_ttft_warmup.json",
             "*_ttft_warmup.png",
             "*_ttft_hist.json",
             "*_ttft_hist.png",
+            "*_3way*_ttft_warmup.json",
+            "*_3way*_ttft_warmup.png",
+            "*_3way*_ttft_hist.json",
+            "*_3way*_ttft_hist.png",
+            "*_recomp_sweep*_scores.json",
         ):
             for p in sorted(inputs_dir.glob(pattern)):
                 rel = prefix + p.name
@@ -528,6 +535,8 @@ def run_all_blends() -> dict[str, bytes]:
     paths = sorted(
         p for p in ex_dir.glob(BLEND_PATTERN)
         if "_comp.py" not in p.name
+        and "_3way.py" not in p.name
+        and "_sweep.py" not in p.name
     )
     print(f"[modal] run_all_blends: {len(paths)} script(s)", flush=True)
     for path in paths:
@@ -563,6 +572,96 @@ def standard_comp():
     _save_results_locally(artifacts)
 
 
+@app.function(**_fn_with_workspace_secrets(_FN))
+def run_all_blends_3way(
+    recomp_ratio: float | None = None,
+    pair_recomp_ratio: float | None = None,
+    output_tag: str = "",
+) -> dict[str, bytes]:
+    """Run every ``standard_qa/runners/blend_*_3way.py`` (Full vs CompCache-single vs CompCache+pairs).
+
+    Optional knobs (propagated via env to the standard_qa 3-way wrapper):
+
+    - ``recomp_ratio``: overrides the per-script ``recomp_ratio`` for single-chunk.
+    - ``pair_recomp_ratio``: overrides the per-script ``pair_recomp_ratio`` for +pairs.
+    - ``output_tag``: if non-empty, artifacts are written as ``*_3way_<tag>_*`` so
+      prior runs under ``*_3way_*`` are preserved.
+    """
+    _maybe_pin_cuda_visible_device0()
+    alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = alloc
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
+    if recomp_ratio is not None:
+        os.environ["STANDARD_COMP_RECOMP_RATIO"] = str(recomp_ratio)
+    if pair_recomp_ratio is not None:
+        os.environ["STANDARD_COMP_PAIR_RECOMP_RATIO"] = str(pair_recomp_ratio)
+    if output_tag:
+        os.environ["THREE_WAY_OUTPUT_TAG"] = output_tag
+
+    ex_dir = Path(_CONTAINER_RUNNERS)
+    paths = sorted(ex_dir.glob("blend_*_3way.py"))
+    print(
+        f"[modal] run_all_blends_3way: {len(paths)} script(s) "
+        f"recomp={recomp_ratio} pair_recomp={pair_recomp_ratio} tag={output_tag!r}",
+        flush=True,
+    )
+    for path in paths:
+        _mistral_only(path)
+        _run_blend_script(path)
+    return _collect_result_jsons()
+
+
+@app.local_entrypoint()
+def standard_3way(
+    recomp_ratio: float | None = None,
+    pair_recomp_ratio: float | None = None,
+    output_tag: str = "",
+):
+    """Run every standard 3-way benchmark (``blend_*_3way.py``); downloads ``*_3way_*`` artifacts.
+
+    Pass ``--output-tag r018`` to preserve prior ``*_3way_*`` artifacts; new run is
+    written under ``*_3way_r018_*``.
+    """
+    with modal.enable_output():
+        artifacts = run_all_blends_3way.remote(
+            recomp_ratio=recomp_ratio,
+            pair_recomp_ratio=pair_recomp_ratio,
+            output_tag=output_tag,
+        )
+    _save_results_locally(artifacts)
+
+
+@app.function(**_fn_with_workspace_secrets(_FN))
+def run_recomp_sweep(output_tag: str = "") -> dict[str, bytes]:
+    """Run the HotpotQA recomputation-ratio sweep (``blend_hotpotqa_sweep.py``)."""
+    _maybe_pin_cuda_visible_device0()
+    alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = alloc
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
+    if output_tag:
+        os.environ["RECOMP_SWEEP_OUTPUT_TAG"] = output_tag
+
+    path = Path(_CONTAINER_RUNNERS) / "blend_hotpotqa_sweep.py"
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    _mistral_only(path)
+    print(f"[modal] run_recomp_sweep: {path.name} tag={output_tag!r}", flush=True)
+    _run_blend_script(path)
+    return _collect_result_jsons()
+
+
+@app.local_entrypoint()
+def recomp_sweep(output_tag: str = ""):
+    """HotpotQA recomputation-ratio sweep; downloads ``*_recomp_sweep_*`` artifacts."""
+    with modal.enable_output():
+        artifacts = run_recomp_sweep.remote(output_tag=output_tag)
+    _save_results_locally(artifacts)
+
+
 @app.local_entrypoint()
 def main(script: str | None = None, realistic: bool = False):
     """Default entry: all standard blends, or one ``blend_*.py``, or realistic if ``--realistic``."""
@@ -591,7 +690,7 @@ def realistic(
     promotion_threshold: int = 10,
     promote_sync: bool = False,
 ):
-    """Run extended CacheBlend on Modal (FIFO or composition-aware).
+    """Run extended CacheBlend on Modal (FIFO, composition-aware, or 3-way).
 
     Default is the committed smoke fixture. For the full 6K benchmark, build locally then::
 
@@ -600,6 +699,10 @@ def realistic(
     On ~48GB GPUs, keep default ``max_ctx_len`` (8192) or lower; use ``--max-ctx-len 0``
     only if you have enough VRAM for full Mistral-32k-style profiles.
 
+    ``mode=3way`` runs Full Prefill / CompCache (single-chunk) / CompCache (+pairs)
+    back-to-back per query against independent FIFO state per method, writing
+    ``*_3way_scores.json`` and ``*_3way_ttft_*`` plots.
+
     Examples::
 
         modal run modal_runner.py::realistic
@@ -607,6 +710,7 @@ def realistic(
         modal run modal_runner.py::realistic --mode comp --pair-store-capacity 256 \
             --promotion-threshold 10
         modal run modal_runner.py::realistic --mode comp --promote-sync    # microbench
+        modal run modal_runner.py::realistic --mode 3way --dataset realistic_qa/inputs/extended_cacheblend.json
     """
     with modal.enable_output():
         artifacts = run_realistic_blend.remote(

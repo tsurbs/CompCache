@@ -604,3 +604,266 @@ def run_blend_eval_comp(
         shuffle_dataset=False,
         standard_qa=True,
     )
+
+
+def run_blend_eval_three_way(
+    dataset_path,
+    prefix_prompt,
+    prompt_builder,
+    metric_fn,
+    metric_name,
+    inst_tokens=None,
+    s_end=None,
+    suffix_is_query_len=True,
+    max_ctx_len=None,
+    max_tokens=32,
+    recomp_ratio=None,
+    pair_recomp_ratio=None,
+    fast_attention=None,
+    extra_metadata=None,
+    post_process=None,
+    clear_hack_kv=False,
+    model_name="mistralai/Mistral-7B-Instruct-v0.2",
+    gpu_memory_utilization=None,
+    max_model_len=None,
+    num_layers=32,
+    fifo_max_chunks=None,
+    pair_store_capacity=None,
+):
+    """Three-way eval (Full / CompCache-single / CompCache+pairs) for standard QA.
+
+    Re-uses the same env-var knobs as ``run_blend_eval_comp``
+    (``STANDARD_COMP_*``). Each query runs all three methods back-to-back
+    against independent FIFO state per method.
+
+    The +pairs method uses the per-query, no-cache assembler
+    (:func:`per_query_pair_assembler.assemble_pairs_per_query`): the retrieved
+    doc list is grouped into adjacent pairs and each pair's joint KV is
+    computed fresh on that query (simulating a 100% pair-store hit rate
+    without cross-query caching). ``pair_store_capacity`` is therefore ignored
+    in standard_qa 3-way; it is accepted for API compatibility.
+    Output suffix is ``_3way``.
+    """
+    import sys
+    from pathlib import Path
+
+    effective_max_ctx = max_ctx_len
+    if effective_max_ctx is None:
+        raw = os.environ.get("STANDARD_COMP_MAX_CTX_LEN")
+        if raw is None:
+            effective_max_ctx = 4096
+        elif raw.strip() == "0":
+            effective_max_ctx = None
+        else:
+            try:
+                effective_max_ctx = int(raw)
+            except ValueError:
+                effective_max_ctx = 4096
+
+    effective_gpu = gpu_memory_utilization
+    if effective_gpu is None:
+        raw_g = os.environ.get("STANDARD_COMP_GPU_MEMORY_UTILIZATION")
+        if raw_g is not None:
+            try:
+                effective_gpu = float(raw_g)
+            except ValueError:
+                effective_gpu = 0.38
+        else:
+            effective_gpu = 0.38
+
+    effective_mml = max_model_len
+    if effective_mml is None:
+        raw_m = os.environ.get("STANDARD_COMP_MAX_MODEL_LEN")
+        if raw_m is not None and raw_m.strip() != "0":
+            try:
+                effective_mml = int(raw_m)
+            except ValueError:
+                effective_mml = None
+        if effective_mml is None and effective_max_ctx is not None:
+            effective_mml = effective_max_ctx + 2048
+
+    effective_fifo = fifo_max_chunks
+    if effective_fifo is None:
+        raw_f = os.environ.get("STANDARD_COMP_FIFO_MAX_CHUNKS")
+        if raw_f is not None:
+            try:
+                effective_fifo = max(1, int(raw_f))
+            except ValueError:
+                effective_fifo = 512
+        else:
+            effective_fifo = 512
+
+    effective_pair = pair_store_capacity
+    if effective_pair is None:
+        raw_p = os.environ.get("STANDARD_COMP_PAIR_STORE_CAP")
+        if raw_p is not None:
+            try:
+                effective_pair = max(1, int(raw_p))
+            except ValueError:
+                effective_pair = 128
+        else:
+            effective_pair = 128
+
+    _repo = Path(__file__).resolve().parents[2]
+    _rr = str(_repo / "realistic_qa" / "runners")
+    if _rr not in sys.path:
+        sys.path.insert(0, _rr)
+    from three_way_eval import run_blend_eval_three_way as _run_3way_impl
+
+    # Env overrides take priority so we can rerun all 6 blend scripts at a new
+    # recomp setting without editing any of them (e.g. calibration sweeps).
+    effective_recomp = recomp_ratio
+    raw_r = os.environ.get("STANDARD_COMP_RECOMP_RATIO")
+    if raw_r is not None and raw_r.strip() != "":
+        try:
+            effective_recomp = float(raw_r)
+        except ValueError:
+            pass
+
+    effective_pair_recomp = pair_recomp_ratio
+    raw_pr = os.environ.get("STANDARD_COMP_PAIR_RECOMP_RATIO")
+    if raw_pr is not None and raw_pr.strip() != "":
+        try:
+            effective_pair_recomp = float(raw_pr)
+        except ValueError:
+            pass
+
+    return _run_3way_impl(
+        dataset_path,
+        prefix_prompt,
+        prompt_builder,
+        metric_fn,
+        metric_name,
+        inst_tokens=inst_tokens,
+        s_end=s_end,
+        suffix_is_query_len=suffix_is_query_len,
+        max_ctx_len=effective_max_ctx,
+        max_tokens=max_tokens,
+        recomp_ratio=effective_recomp,
+        pair_recomp_ratio=effective_pair_recomp,
+        fast_attention=fast_attention,
+        extra_metadata=extra_metadata,
+        post_process=post_process,
+        clear_hack_kv=clear_hack_kv,
+        model_name=model_name,
+        gpu_memory_utilization=effective_gpu,
+        max_model_len=effective_mml,
+        num_layers=num_layers,
+        stream_seed=0,
+        skip_first=0,
+        fifo_max_chunks=effective_fifo,
+        pair_store_capacity=effective_pair,
+        shuffle_dataset=False,
+        standard_qa=True,
+    )
+
+
+def run_blend_eval_recomp_sweep(
+    dataset_path,
+    prefix_prompt,
+    prompt_builder,
+    metric_fn,
+    metric_name,
+    *,
+    recomp_ratios,
+    pair_ratio_fn=lambda r: r / 2.0,
+    inst_tokens=None,
+    s_end=None,
+    suffix_is_query_len=True,
+    max_ctx_len=None,
+    max_tokens=32,
+    fast_attention=None,
+    extra_metadata=None,
+    post_process=None,
+    clear_hack_kv=False,
+    model_name="mistralai/Mistral-7B-Instruct-v0.2",
+    gpu_memory_utilization=None,
+    max_model_len=None,
+    num_layers=32,
+    fifo_max_chunks=None,
+):
+    """Recomputation-ratio sweep wrapper for standard QA.
+
+    Reuses :func:`recomp_sweep_eval.run_recomp_sweep_eval`. Runs Full Prefill
+    once and cached-prefill at every ``recomp_ratios`` value for both the
+    single-chunk and pair KV stacks (``pair_ratio_fn(r)`` default = ``r/2``).
+    """
+    import sys
+    from pathlib import Path
+
+    effective_max_ctx = max_ctx_len
+    if effective_max_ctx is None:
+        raw = os.environ.get("STANDARD_COMP_MAX_CTX_LEN")
+        if raw is None:
+            effective_max_ctx = 4096
+        elif raw.strip() == "0":
+            effective_max_ctx = None
+        else:
+            try:
+                effective_max_ctx = int(raw)
+            except ValueError:
+                effective_max_ctx = 4096
+
+    effective_gpu = gpu_memory_utilization
+    if effective_gpu is None:
+        raw_g = os.environ.get("STANDARD_COMP_GPU_MEMORY_UTILIZATION")
+        if raw_g is not None:
+            try:
+                effective_gpu = float(raw_g)
+            except ValueError:
+                effective_gpu = 0.38
+        else:
+            effective_gpu = 0.38
+
+    effective_mml = max_model_len
+    if effective_mml is None:
+        raw_m = os.environ.get("STANDARD_COMP_MAX_MODEL_LEN")
+        if raw_m is not None and raw_m.strip() != "0":
+            try:
+                effective_mml = int(raw_m)
+            except ValueError:
+                effective_mml = None
+        if effective_mml is None and effective_max_ctx is not None:
+            effective_mml = effective_max_ctx + 2048
+
+    effective_fifo = fifo_max_chunks
+    if effective_fifo is None:
+        raw_f = os.environ.get("STANDARD_COMP_FIFO_MAX_CHUNKS")
+        if raw_f is not None:
+            try:
+                effective_fifo = max(1, int(raw_f))
+            except ValueError:
+                effective_fifo = 512
+        else:
+            effective_fifo = 512
+
+    _repo = Path(__file__).resolve().parents[2]
+    _rr = str(_repo / "realistic_qa" / "runners")
+    if _rr not in sys.path:
+        sys.path.insert(0, _rr)
+    from recomp_sweep_eval import run_recomp_sweep_eval as _run_sweep_impl
+
+    return _run_sweep_impl(
+        dataset_path,
+        prefix_prompt,
+        prompt_builder,
+        metric_fn,
+        metric_name,
+        recomp_ratios=recomp_ratios,
+        pair_ratio_fn=pair_ratio_fn,
+        inst_tokens=inst_tokens,
+        s_end=s_end,
+        suffix_is_query_len=suffix_is_query_len,
+        max_ctx_len=effective_max_ctx,
+        max_tokens=max_tokens,
+        fast_attention=fast_attention,
+        extra_metadata=extra_metadata,
+        post_process=post_process,
+        clear_hack_kv=clear_hack_kv,
+        model_name=model_name,
+        gpu_memory_utilization=effective_gpu,
+        max_model_len=effective_mml,
+        num_layers=num_layers,
+        fifo_max_chunks=effective_fifo,
+        shuffle_dataset=False,
+    )
