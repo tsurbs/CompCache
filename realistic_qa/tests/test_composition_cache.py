@@ -330,6 +330,122 @@ def test_threshold_crossing_enqueues_promotion_job():
     assert promoted == [chunk_a + chunk_b]
 
 
+# ---- disable_pairs: short-circuits pair matching, store, and promotion ----
+
+
+def test_disable_pairs_skips_pair_lookup_and_promotion():
+    """`disable_pairs=True` should run as pure chunk-FIFO + selective recompute
+    (Method 2 in the three-way runner): no pair-store hits, no logger reads,
+    no promotion enqueue, no reordering."""
+    store = FullJointPairStore(max_entries=4)
+    promoted: list = []
+
+    def stub_forward(tokens):
+        promoted.append(list(tokens))
+        return _layers_for(len(tokens), 99.0)
+
+    worker = PromotionWorker(store, stub_forward, threading.Lock())
+    individual = FIFOChunkKVCache(max_entries=16)
+    logger = CoRetrievalLogger(promotion_threshold=2)  # would fire as soon as the same pair re-occurs
+    cc = CompositionCache(
+        individual_cache=individual,
+        pair_store=store,
+        logger=logger,
+        promotion_worker=worker,
+        promote_sync=True,
+    )
+
+    instr = [9]
+    chunk_z = [70, 71]
+    chunk_a = [10, 11, 12]
+    query = [40]
+    doc_chunk_ids = [instr, chunk_z, chunk_a, query]
+    retrieval_ids = ["d_z", "d_a"]
+
+    # Pre-populate the pair store so a normal call WOULD see a pair hit.
+    joint = _layers_for(len(chunk_a) + len(chunk_z), 999.0)
+    store.put("d_a", "d_z", joint)
+
+    run_instr, run_chunk, calls = _make_forwards()
+    _, kvs, reordered, stats = cc.assemble(
+        doc_chunk_ids=doc_chunk_ids,
+        retrieval_doc_ids=retrieval_ids,
+        instr_cache_key="__instr__",
+        query_cache_key="q:1",
+        chunk_cache_key_fn=_chunk_cache_key,
+        run_instr_forward=run_instr,
+        run_chunk_forward=run_chunk,
+        s_start_len=1,
+        s_start_1_len=2,
+        disable_pairs=True,
+    )
+
+    # No pair was matched, no pair lookup, no joint-KV consumed.
+    assert stats.pair_hits == 0
+    assert stats.pair_misses == 0
+    assert stats.matched_pairs == []
+
+    # Both retrieved chunks were forwarded individually (instr + d_z + d_a + query = 4).
+    chunk_tokens_run = {c[0] for c in calls["chunk"]}
+    assert tuple(chunk_z) in chunk_tokens_run
+    assert tuple(chunk_a) in chunk_tokens_run
+
+    # Original retrieval order preserved (no reorder for adjacency).
+    assert reordered == [instr, chunk_z, chunk_a, query]
+
+    # Logger did NOT record this query (promotion path skipped entirely).
+    assert logger.count("d_a", "d_z") == 0
+    assert promoted == [], "no promotion forward should have run"
+    assert stats.promotions_enqueued == 0
+
+
+def test_disable_pairs_still_uses_individual_fifo():
+    """With pairs disabled, chunk-FIFO reuse across queries must still work."""
+    cc, individual, _, _ = _make_instance()
+    instr = [9, 9]
+    chunks = [[10, 11], [20, 21]]
+    query_a = [40]
+    query_b = [41]
+    retrieval = ["d_a", "d_b"]
+
+    run_instr, run_chunk, calls1 = _make_forwards()
+    cc.assemble(
+        doc_chunk_ids=[instr, *chunks, query_a],
+        retrieval_doc_ids=retrieval,
+        instr_cache_key="__instr__",
+        query_cache_key="q:1",
+        chunk_cache_key_fn=_chunk_cache_key,
+        run_instr_forward=run_instr,
+        run_chunk_forward=run_chunk,
+        s_start_len=2,
+        s_start_1_len=2,
+        disable_pairs=True,
+    )
+    assert calls1["instr"] == 1
+    assert len(calls1["chunk"]) == 3  # 2 chunks + query
+
+    # Second pass with same chunks (different query) should hit FIFO for instr+chunks.
+    run_instr2, run_chunk2, calls2 = _make_forwards()
+    _, _, _, stats = cc.assemble(
+        doc_chunk_ids=[instr, *chunks, query_b],
+        retrieval_doc_ids=retrieval,
+        instr_cache_key="__instr__",
+        query_cache_key="q:2",
+        chunk_cache_key_fn=_chunk_cache_key,
+        run_instr_forward=run_instr2,
+        run_chunk_forward=run_chunk2,
+        s_start_len=2,
+        s_start_1_len=2,
+        disable_pairs=True,
+    )
+    assert calls2["instr"] == 0
+    assert len(calls2["chunk"]) == 1  # only the new query forced a miss
+    assert stats.individual_hits == 3  # instr + 2 chunks
+    assert stats.individual_misses == 1
+    # FIFO holds: instr + 2 chunks + query_a + query_b (each query gets a distinct key).
+    assert len(individual) == 5
+
+
 def test_newly_ready_pair_not_in_current_retrieval_is_skipped():
     store = FullJointPairStore(max_entries=4)
     promoted: list = []
@@ -403,3 +519,231 @@ def test_newly_ready_pair_not_in_current_retrieval_is_skipped():
     assert stats.promotions_enqueued == 0
     assert promoted == []
     assert not store.contains("d_missing_a", "d_missing_b")
+
+
+# ---- treat_all_pairs_as_cached (realistic 3-way mode) ----------------------
+
+
+def _make_pair_forward(marker_fn=None):
+    """Factory for a stub run_pair_forward that snapshots the concat it sees.
+
+    Returns (fn, calls) where calls is a list of (concat_tokens, marker) tuples.
+    """
+    calls: list = []
+
+    def run_pair(concat_tokens):
+        calls.append(tuple(concat_tokens))
+        m = 999.0 if marker_fn is None else float(marker_fn(concat_tokens))
+        return _layers_for(len(concat_tokens), m)
+
+    return run_pair, calls
+
+
+def test_treat_all_pairs_sync_computes_joint_kv_on_miss_and_populates_store():
+    store = FullJointPairStore(max_entries=4, fifo=True)
+    individual = FIFOChunkKVCache(max_entries=16)
+    logger = CoRetrievalLogger(promotion_threshold=2)
+    cc = CompositionCache(
+        individual_cache=individual,
+        pair_store=store,
+        logger=logger,
+        promotion_worker=None,
+    )
+
+    run_instr, run_chunk, _ = _make_forwards()
+    run_pair, pair_calls = _make_pair_forward()
+
+    instr = [9]
+    chunk_a = [10]
+    chunk_b = [20]
+    query = [40]
+    _, _, _, stats = cc.assemble(
+        doc_chunk_ids=[instr, chunk_a, chunk_b, query],
+        retrieval_doc_ids=["d_a", "d_b"],
+        instr_cache_key="__instr__",
+        query_cache_key="q:1",
+        chunk_cache_key_fn=_chunk_cache_key,
+        run_instr_forward=run_instr,
+        run_chunk_forward=run_chunk,
+        run_pair_forward=run_pair,
+        s_start_len=1,
+        s_start_1_len=2,
+        treat_all_pairs_as_cached=True,
+    )
+    assert len(pair_calls) == 1
+    assert pair_calls[0] == tuple(chunk_a + chunk_b)
+    assert stats.pair_hits == 1
+    assert store.contains("d_a", "d_b")
+
+
+def test_treat_all_pairs_reuses_stored_kv_on_second_encounter():
+    store = FullJointPairStore(max_entries=4, fifo=True)
+    individual = FIFOChunkKVCache(max_entries=16)
+    logger = CoRetrievalLogger(promotion_threshold=2)
+    cc = CompositionCache(
+        individual_cache=individual,
+        pair_store=store,
+        logger=logger,
+        promotion_worker=None,
+    )
+
+    run_instr, run_chunk, _ = _make_forwards()
+    run_pair, pair_calls = _make_pair_forward()
+
+    common = dict(
+        instr_cache_key="__instr__",
+        chunk_cache_key_fn=_chunk_cache_key,
+        run_instr_forward=run_instr,
+        run_chunk_forward=run_chunk,
+        run_pair_forward=run_pair,
+        s_start_len=1,
+        s_start_1_len=2,
+        treat_all_pairs_as_cached=True,
+    )
+
+    cc.assemble(
+        doc_chunk_ids=[[9], [10], [20], [40]],
+        retrieval_doc_ids=["d_a", "d_b"],
+        query_cache_key="q:1",
+        **common,
+    )
+    cc.assemble(
+        doc_chunk_ids=[[9], [10], [20], [41]],
+        retrieval_doc_ids=["d_a", "d_b"],
+        query_cache_key="q:2",
+        **common,
+    )
+    # Exactly ONE sync pair compute total (second query hits the store).
+    # Each query's consume phase calls pair_store.get() once, so 2 hits across
+    # two queries — the first query's hit is satisfied by the KV we just
+    # sync-put, the second query's hit reuses it without recompute.
+    assert len(pair_calls) == 1
+    assert store.stats()["hits"] == 2
+
+
+def test_treat_all_pairs_fifo_store_evicts_in_insertion_order():
+    store = FullJointPairStore(max_entries=1, fifo=True)
+    individual = FIFOChunkKVCache(max_entries=16)
+    logger = CoRetrievalLogger(promotion_threshold=2)
+    cc = CompositionCache(
+        individual_cache=individual, pair_store=store,
+        logger=logger, promotion_worker=None,
+    )
+
+    run_instr, run_chunk, _ = _make_forwards()
+    run_pair, pair_calls = _make_pair_forward()
+    common = dict(
+        instr_cache_key="__instr__",
+        chunk_cache_key_fn=_chunk_cache_key,
+        run_instr_forward=run_instr,
+        run_chunk_forward=run_chunk,
+        run_pair_forward=run_pair,
+        s_start_len=1,
+        s_start_1_len=2,
+        treat_all_pairs_as_cached=True,
+    )
+
+    cc.assemble(
+        doc_chunk_ids=[[9], [10], [20], [40]],
+        retrieval_doc_ids=["d_a", "d_b"],
+        query_cache_key="q:1",
+        **common,
+    )
+    cc.assemble(
+        doc_chunk_ids=[[9], [11], [21], [41]],
+        retrieval_doc_ids=["d_c", "d_d"],
+        query_cache_key="q:2",
+        **common,
+    )
+    # Second insert evicts the first (capacity=1, FIFO).
+    assert store.stats()["evictions"] == 1
+    assert not store.contains("d_a", "d_b")
+    assert store.contains("d_c", "d_d")
+    # Re-encountering d_a,d_b forces a recompute.
+    cc.assemble(
+        doc_chunk_ids=[[9], [10], [20], [42]],
+        retrieval_doc_ids=["d_a", "d_b"],
+        query_cache_key="q:3",
+        **common,
+    )
+    assert len(pair_calls) == 3  # q1 compute, q2 compute, q3 recompute
+
+
+def test_treat_all_pairs_and_disable_pairs_are_mutually_exclusive():
+    store = FullJointPairStore(max_entries=1)
+    individual = FIFOChunkKVCache(max_entries=16)
+    logger = CoRetrievalLogger(promotion_threshold=2)
+    cc = CompositionCache(
+        individual_cache=individual, pair_store=store,
+        logger=logger, promotion_worker=None,
+    )
+    run_instr, run_chunk, _ = _make_forwards()
+    run_pair, _ = _make_pair_forward()
+    import pytest
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        cc.assemble(
+            doc_chunk_ids=[[9], [10], [20], [40]],
+            retrieval_doc_ids=["d_a", "d_b"],
+            instr_cache_key="__instr__",
+            query_cache_key="q:1",
+            chunk_cache_key_fn=_chunk_cache_key,
+            run_instr_forward=run_instr,
+            run_chunk_forward=run_chunk,
+            run_pair_forward=run_pair,
+            s_start_len=1,
+            s_start_1_len=2,
+            disable_pairs=True,
+            treat_all_pairs_as_cached=True,
+        )
+
+
+def test_treat_all_pairs_requires_run_pair_forward():
+    store = FullJointPairStore(max_entries=1)
+    individual = FIFOChunkKVCache(max_entries=16)
+    logger = CoRetrievalLogger(promotion_threshold=2)
+    cc = CompositionCache(
+        individual_cache=individual, pair_store=store,
+        logger=logger, promotion_worker=None,
+    )
+    run_instr, run_chunk, _ = _make_forwards()
+    import pytest
+    with pytest.raises(ValueError, match="run_pair_forward"):
+        cc.assemble(
+            doc_chunk_ids=[[9], [10], [20], [40]],
+            retrieval_doc_ids=["d_a", "d_b"],
+            instr_cache_key="__instr__",
+            query_cache_key="q:1",
+            chunk_cache_key_fn=_chunk_cache_key,
+            run_instr_forward=run_instr,
+            run_chunk_forward=run_chunk,
+            s_start_len=1,
+            s_start_1_len=2,
+            treat_all_pairs_as_cached=True,
+        )
+
+
+def test_treat_all_pairs_does_not_touch_logger():
+    store = FullJointPairStore(max_entries=4, fifo=True)
+    individual = FIFOChunkKVCache(max_entries=16)
+    logger = CoRetrievalLogger(promotion_threshold=2)
+    cc = CompositionCache(
+        individual_cache=individual, pair_store=store,
+        logger=logger, promotion_worker=None,
+    )
+    run_instr, run_chunk, _ = _make_forwards()
+    run_pair, _ = _make_pair_forward()
+    cc.assemble(
+        doc_chunk_ids=[[9], [10], [20], [40]],
+        retrieval_doc_ids=["d_a", "d_b"],
+        instr_cache_key="__instr__",
+        query_cache_key="q:1",
+        chunk_cache_key_fn=_chunk_cache_key,
+        run_instr_forward=run_instr,
+        run_chunk_forward=run_chunk,
+        run_pair_forward=run_pair,
+        s_start_len=1,
+        s_start_1_len=2,
+        treat_all_pairs_as_cached=True,
+    )
+    # Logger saw nothing (no record calls).
+    assert logger.count("d_a", "d_b") == 0

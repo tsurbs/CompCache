@@ -11,7 +11,12 @@ _INPUTS = Path(__file__).resolve().parents[1] / "inputs"
 
 
 def _ttft_hist_paths():
-    return sorted(_INPUTS.glob("*_ttft_hist.json"))
+    # Exclude the 3-way artifacts: they have a different schema
+    # (ttft_full/ttft_single/ttft_pair instead of blend/full).
+    return sorted(
+        p for p in _INPUTS.glob("*_ttft_hist.json")
+        if "_3way_" not in p.name
+    )
 
 
 def test_ttft_hist_files_exist():

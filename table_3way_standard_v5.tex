@@ -1,0 +1,24 @@
+\begin{table*}[t]
+\centering
+\caption{Three-way comparison on standard-QA datasets: Full Prefill vs.\ CompCache single-chunk vs.\ CompCache with CacheBlend pair composition (`+Pairs'). Single-chunk uses \texttt{recomp\_ratio}=0.18; +Pairs uses \texttt{recomp\_ratio}=0.09 (half the repair budget, exploiting higher-fidelity pair KVs). Full Prefill has no repair step. Score is F1 (or ROUGE-L for SAMSum); TTFT in seconds; Speedup $=\mathrm{TTFT}_\mathrm{Full}/\mathrm{TTFT}_\mathrm{method}$.}
+\label{tab:3way-standard-v5}
+\renewcommand{\arraystretch}{1.15}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|c|c|ccc|ccc|cc}
+\hline
+\multirow{2}{*}{Dataset} & \multirow{2}{*}{Metric} & \multirow{2}{*}{$n$} & \multicolumn{3}{c|}{Score ($\uparrow$)} & \multicolumn{3}{c|}{TTFT (s, $\downarrow$)} & \multicolumn{2}{c}{Speedup ($\uparrow$)} \\
+\cline{4-11}
+ & & & Full & Single & +Pairs & Full & Single & +Pairs & Single & +Pairs \\
+\hline
+HotpotQA & F1 & 200 & \textbf{0.369} & 0.274 & 0.292 & 0.129 & 0.041 & \textbf{0.037} & 3.14$\times$ & \textbf{3.48$\times$} \\
+MultiHopRAG & F1 & 172 & \textbf{0.401} & 0.290 & 0.298 & 0.033 & 0.028 & \textbf{0.026} & 1.19$\times$ & \textbf{1.29$\times$} \\
+Musique & F1 & 150 & \textbf{0.308} & 0.263 & 0.278 & 0.299 & 0.076 & \textbf{0.054} & 3.93$\times$ & \textbf{5.55$\times$} \\
+2WikiMQA & F1 & 200 & \textbf{0.274} & 0.225 & 0.242 & 0.302 & 0.077 & \textbf{0.054} & 3.92$\times$ & \textbf{5.60$\times$} \\
+2WikiMQA-Zipf & F1 & 582 & 0.159 & 0.188 & \textbf{0.205} & 0.290 & 0.073 & \textbf{0.053} & 3.95$\times$ & \textbf{5.43$\times$} \\
+SAMSum & RL & 200 & 0.394 & 0.391 & \textbf{0.397} & 0.259 & 0.078 & \textbf{0.058} & 3.34$\times$ & \textbf{4.46$\times$} \\
+\hline
+\textit{Avg.} & -- & -- & \textbf{0.317} & 0.272 & 0.285 & 0.219 & 0.062 & \textbf{0.047} & 3.52$\times$ & \textbf{4.65$\times$} \\
+\hline
+\end{tabular}%
+}
+\end{table*}

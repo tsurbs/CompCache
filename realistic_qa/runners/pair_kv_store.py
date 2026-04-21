@@ -86,11 +86,16 @@ class FullJointPairStore(PairKVStore):
         *,
         store_on_cpu: bool = False,
         cuda_device: int | str | torch.device | None = None,
+        fifo: bool = False,
     ) -> None:
         if max_entries < 1:
             raise ValueError("max_entries must be >= 1")
         self.max_entries = max_entries
         self.store_on_cpu = store_on_cpu
+        # ``fifo=True`` evicts in pure insertion order (no LRU-style touch on get
+        # or on a put-of-existing-key). Used by the realistic 3-way runner where
+        # the pair store is treated as a normal FIFO of joint-KV computations.
+        self.fifo = fifo
         if cuda_device is None:
             self._cuda_device = (
                 torch.device("cuda:0")
@@ -126,7 +131,8 @@ class FullJointPairStore(PairKVStore):
         if got is None:
             self.misses += 1
             return None
-        self._store.move_to_end(key)
+        if not self.fifo:
+            self._store.move_to_end(key)
         self.hits += 1
         return [self._materialize_for_read(t[0], t[1]) for t in got]
 
@@ -141,7 +147,8 @@ class FullJointPairStore(PairKVStore):
     def put(self, doc_a: str, doc_b: str, joint_layers: StackedLayers) -> None:
         key = pair_hash_key(doc_a, doc_b)
         if key in self._store:
-            self._store.move_to_end(key)
+            if not self.fifo:
+                self._store.move_to_end(key)
             return
         if self.store_on_cpu:
             frozen: StackedLayers = [
@@ -166,4 +173,5 @@ class FullJointPairStore(PairKVStore):
             "entries": len(self._store),
             "capacity": self.max_entries,
             "kind": "full_joint",
+            "fifo": self.fifo,
         }

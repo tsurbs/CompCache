@@ -26,6 +26,7 @@ from utils import (  # noqa: E402
 from kv_fifo_cache import FIFOChunkKVCache  # noqa: E402
 
 from comp_blend_eval import _chunk_cache_key, run_blend_eval_comp  # noqa: E402
+from three_way_eval import run_blend_eval_three_way  # noqa: E402
 
 query_prompt = (
     "\n\nAnswer the question directly based on the given passages."
@@ -437,10 +438,20 @@ def main() -> None:
             promotion_threshold=prom_t,
             promote_sync=prom_sync,
         )
+    elif mode == "3way":
+        # Realistic 3-way: the pair store is a plain FIFO of joint-KV
+        # computations (no promotion threshold, sync-compute on miss). Only the
+        # capacity is tunable via env var.
+        pair_cap = int(os.environ.get("REALISTIC_PAIR_STORE_CAP", "256"))
+        print(f"[mode=3way] pair_store_cap={pair_cap} (FIFO, no promotion threshold)")
+        run_blend_eval_three_way(
+            **common_kwargs,
+            pair_store_capacity=pair_cap,
+        )
     elif mode == "fifo":
         run_blend_eval_fifo(**common_kwargs)
     else:
-        raise ValueError(f"Unknown REALISTIC_MODE={mode!r}; expected 'fifo' or 'comp'")
+        raise ValueError(f"Unknown REALISTIC_MODE={mode!r}; expected 'fifo', 'comp', or '3way'")
 
 
 if __name__ == "__main__":

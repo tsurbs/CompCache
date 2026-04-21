@@ -13,7 +13,7 @@ def _blend_scripts():
 def test_each_blend_script_uses_run_blend_eval_and_mistral():
     assert _blend_scripts(), f"expected blend_*.py under {_RUNNERS}"
     for path in _blend_scripts():
-        if "_comp.py" in path.name:
+        if "_comp.py" in path.name or "_3way.py" in path.name or "_sweep.py" in path.name:
             continue
         src = path.read_text(encoding="utf-8")
         assert "run_blend_eval" in src, f"{path.name} must call run_blend_eval"
@@ -27,6 +27,18 @@ def test_each_blend_comp_script_uses_run_blend_eval_comp():
     for path in comp_paths:
         src = path.read_text(encoding="utf-8")
         assert "run_blend_eval_comp" in src, f"{path.name} must call run_blend_eval_comp"
+        assert "mistralai/Mistral" in src
+        assert "standard_qa/inputs/" in src
+
+
+def test_each_blend_3way_script_uses_run_blend_eval_three_way():
+    paths = sorted(_RUNNERS.glob("blend_*_3way.py"))
+    assert paths, "expected blend_*_3way.py scripts"
+    for path in paths:
+        src = path.read_text(encoding="utf-8")
+        assert "run_blend_eval_three_way" in src, (
+            f"{path.name} must call run_blend_eval_three_way"
+        )
         assert "mistralai/Mistral" in src
         assert "standard_qa/inputs/" in src
 

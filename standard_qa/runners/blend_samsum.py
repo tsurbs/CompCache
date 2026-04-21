@@ -12,7 +12,7 @@ run_blend_eval(
     suffix_is_query_len=True,
     max_ctx_len=3400,
     max_tokens=128,
-    recomp_ratio=0.18,
+    recomp_ratio=0.5,
     fast_attention=True,
     extra_metadata={"attn_bias": None},
     post_process=lambda s: s.lstrip('\n').split('\n')[0],

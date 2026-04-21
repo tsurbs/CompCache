@@ -56,6 +56,10 @@ class QueryStats:
 # run_chunk_forward(token_ids, slice_start, slice_end) → per-layer [K,V]
 CollectionForward = Callable[[List[int], int, int], StackedLayers]
 
+# run_pair_forward(concat_tokens) → per-layer [K,V] for the joint pair prefill,
+# starting from the s_start_1 boundary (matches three_way_eval._run_pair_forward).
+PairForward = Callable[[List[int]], StackedLayers]
+
 
 class CompositionCache:
     """Owns the individual FIFO, pair store, promotion worker, and logger."""
@@ -89,6 +93,9 @@ class CompositionCache:
         run_chunk_forward: CollectionForward,
         s_start_len: int,
         s_start_1_len: int,
+        disable_pairs: bool = False,
+        treat_all_pairs_as_cached: bool = False,
+        run_pair_forward: Optional[PairForward] = None,
     ) -> Tuple[List[int], StackedLayers, List[List[int]], QueryStats]:
         """Produce input_ids, old_kvs, reordered_chunks, and stats for one query.
 
@@ -96,7 +103,30 @@ class CompositionCache:
             [0]    instruction prefix (s_start_full)
             [1:-1] retrieved document chunks (len == len(retrieval_doc_ids))
             [-1]   query suffix
+
+        ``disable_pairs=True`` skips pair matching, pair-store lookups, the
+        co-retrieval logger, and promotion enqueue, so this orchestrator runs
+        as a pure "chunk-FIFO + selective recompute" path (CacheBlend Method 2
+        in the three-way comparison).  Used by the three-way runner; existing
+        callers default to the full composition-aware behavior.
+
+        ``treat_all_pairs_as_cached=True`` (mutually exclusive with
+        ``disable_pairs``) bypasses the CoRetrievalLogger entirely: the matcher
+        is invoked with ``is_cached=lambda a,b: True`` so every adjacent pair
+        in the retrieval is matched, and on a pair-store miss the joint KV is
+        computed *synchronously* via ``run_pair_forward(concat_tokens)`` and
+        inserted into the (FIFO) pair store before being consumed.  No
+        promotion threshold; the pair store is the cache.
         """
+        if disable_pairs and treat_all_pairs_as_cached:
+            raise ValueError(
+                "disable_pairs and treat_all_pairs_as_cached are mutually exclusive"
+            )
+        if treat_all_pairs_as_cached and run_pair_forward is None:
+            raise ValueError(
+                "treat_all_pairs_as_cached=True requires run_pair_forward"
+            )
+
         n_docs = len(retrieval_doc_ids)
         assert len(doc_chunk_ids) == n_docs + 2, (
             f"expected {n_docs + 2} chunks (instr + {n_docs} docs + query), "
@@ -105,16 +135,48 @@ class CompositionCache:
 
         stats = QueryStats()
 
-        # 1. Log this query's co-retrievals, get promotion candidates for later enqueue.
-        newly_ready = self.logger.record(retrieval_doc_ids)
+        if disable_pairs:
+            newly_ready: List[Tuple[str, str]] = []
+            matches: List[PairMatch] = []
+        elif treat_all_pairs_as_cached:
+            newly_ready = []
+            # Match greedily across all pairs (predicate always True), with
+            # frequency = 0 so the matcher's tiebreak just falls back to
+            # coverage. We sync-compute any missing pair KVs below.
+            matches = find_best_matching(
+                retrieval_doc_ids,
+                is_cached=lambda a, b: True,
+            )
+        else:
+            # 1. Log this query's co-retrievals, get promotion candidates for later enqueue.
+            newly_ready = self.logger.record(retrieval_doc_ids)
 
-        # 2. Pair matching over retrieval positions 0..n_docs-1.
-        matches = find_best_matching(
-            retrieval_doc_ids,
-            is_cached=self.pair_store.contains,
-            pair_frequency=lambda a, b: self.logger.count(a, b),
-        )
+            # 2. Pair matching over retrieval positions 0..n_docs-1.
+            matches = find_best_matching(
+                retrieval_doc_ids,
+                is_cached=self.pair_store.contains,
+                pair_frequency=lambda a, b: self.logger.count(a, b),
+            )
         stats.matched_pairs = [m.pair_key for m in matches]
+
+        # When treat_all_pairs_as_cached: ensure every matched pair is in the
+        # store before we walk the chunk list. On a miss, sync-compute via
+        # run_pair_forward (which jointly prefills [s_start + a + b] and snapshots
+        # the per-pair KV) and put() it into the pair store (FIFO eviction).
+        if treat_all_pairs_as_cached:
+            for m in matches:
+                doc_a, doc_b = m.pair_key
+                if self.pair_store.contains(doc_a, doc_b):
+                    continue
+                tokens_a = list(doc_chunk_ids[1 + m.positions[0]])
+                tokens_b = list(doc_chunk_ids[1 + m.positions[1]])
+                # Mirrors PromotionWorker._process: feed the raw concat to the
+                # joint forward; ``run_pair_forward`` is responsible for the
+                # ``[s_start_1_len, len(concat)+1]`` slice that produces a KV of
+                # shape [len(tokens_a) + len(tokens_b), ...].
+                concat = tokens_a + tokens_b
+                joint = run_pair_forward(concat)  # type: ignore[misc]
+                self.pair_store.put(doc_a, doc_b, joint)
 
         # 3. Reorder retrieval positions so pair members are adjacent canonically.
         reorder = apply_reordering(retrieval_doc_ids, matches)
@@ -197,6 +259,7 @@ class CompositionCache:
             input_ids.extend(chunk[strip:])
 
         # 7. Enqueue promotion jobs for pairs that just hit the threshold on this query.
+        # (No-op for disable_pairs and treat_all_pairs_as_cached: ``newly_ready`` is empty.)
         if newly_ready and self.worker is not None:
             for doc_a, doc_b in newly_ready:
                 if self.pair_store.contains(doc_a, doc_b):

@@ -102,3 +102,25 @@ def test_miss_counts():
     s = store.stats()
     assert s["misses"] == 1
     assert s["hits"] == 0
+
+
+def test_fifo_eviction_ignores_recency():
+    """With fifo=True, get()/put-existing do NOT refresh insertion order."""
+    store = FullJointPairStore(max_entries=2, fifo=True)
+    store.put("a", "b", _mk_layers(1))
+    store.put("c", "d", _mk_layers(2))
+    # "Touch" ("a","b") — in LRU mode this would save it; in FIFO it must not.
+    _ = store.get("a", "b")
+    store.put("a", "b", _mk_layers(1))  # no-op bump
+    store.put("e", "f", _mk_layers(3))  # must evict the OLDEST insertion: ("a","b")
+    assert not store.contains("a", "b")
+    assert store.contains("c", "d")
+    assert store.contains("e", "f")
+    s = store.stats()
+    assert s["fifo"] is True
+    assert s["evictions"] == 1
+
+
+def test_fifo_flag_surfaces_in_stats():
+    assert FullJointPairStore(max_entries=1).stats()["fifo"] is False
+    assert FullJointPairStore(max_entries=1, fifo=True).stats()["fifo"] is True
