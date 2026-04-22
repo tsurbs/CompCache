@@ -132,6 +132,22 @@ class PromotionWorker(threading.Thread):
                 self.queue.task_done()
 
     def _process(self, job: PromotionJob) -> None:
+        # Skip the expensive forward if the pair is already materialized.
+        # At threshold=0 the logger flags on every first-seen pair; in
+        # dense streams the same canonical pair can also be re-flagged
+        # after eviction.  Without this guard we'd run a ~4k-token
+        # forward per redundant enqueue, which blew the H100's CUDA
+        # allocator past 77 GiB by query ~20 on the 2 GiB-budgeted
+        # delta_memory eval.
+        try:
+            if self.pair_store.contains(job.doc_a, job.doc_b):
+                self.completed += 1
+                return
+        except Exception:
+            # Store implementations should not raise here, but don't let
+            # a contains() bug take down the whole worker.
+            pass
+
         concat = job.tokens_a + job.tokens_b
         try:
             with self.gpu_lock:
@@ -147,3 +163,21 @@ class PromotionWorker(threading.Thread):
         except Exception as exc:  # pragma: no cover - logged at runtime
             self.errors += 1
             print(f"{self._log_prefix} FAILED ({job.doc_a}, {job.doc_b}): {exc}", flush=True)
+        finally:
+            # ``joint_layers`` is a list of per-layer tensor clones on GPU;
+            # ``pair_store.put`` either deep-clones to CPU (``store_on_cpu``)
+            # or keeps only a sparsified delta.  Either way the transient
+            # GPU copy can be released immediately.  Without this the
+            # allocator carried each promotion's reserved blocks forward
+            # and saturated an H100 after ~200 promotions.
+            try:
+                del joint_layers  # noqa: F821 — may not exist if pre-check fired
+            except Exception:
+                pass
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass

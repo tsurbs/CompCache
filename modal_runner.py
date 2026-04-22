@@ -49,8 +49,10 @@ REALISTIC_SCRIPT = "blend_realistic.py"
 
 MISTRAL_ID_PREFIX = "mistralai/Mistral"
 
-# 128 GiB RAM, 1 TiB ephemeral disk (Modal uses MiB for both request knobs).
-_MEM_MIB = 128 * 1024
+# 256 GiB RAM (env-overridable), 1 TiB ephemeral disk.  The delta-memory
+# sweep stacks a full-joint pair store, two delta stores, and a shared
+# per-chunk FIFO — all pinned to host RAM — so we default high.
+_MEM_MIB = int(os.environ.get("MODAL_MEM_MIB", str(256 * 1024)))
 _DISK_MIB = 1024 * 1024
 
 _GPU = os.environ.get("MODAL_GPU", "L40S")
@@ -210,12 +212,29 @@ except FileNotFoundError:
 
 app = modal.App("compcache-blend", image=_blend_image_singleton)
 
+# Persistent artifact storage.  Every benchmark function mounts this
+# Volume and mirrors its result JSONs / PNGs into it after each script
+# completes (see ``_run_blend_script`` and per-runner persist hooks).
+# Survives:
+#   - container teardown (regular completion or SIGKILL),
+#   - the local ``modal run`` process being killed/disconnected,
+#   - mid-suite failures (whatever already finished is on the Volume).
+# Pull a snapshot back to local disk with::
+#
+#     modal run modal_runner.py::pull_artifacts                # everything
+#     modal run modal_runner.py::pull_artifacts --prefix standard_qa/
+_ARTIFACTS_VOLUME = modal.Volume.from_name(
+    "compcache-artifacts", create_if_missing=True,
+)
+_ARTIFACTS_VOLUME_MOUNT = "/artifacts"
+
 _FN = dict(
     gpu=_GPU,
     memory=_MEM_MIB,
     ephemeral_disk=_DISK_MIB,
     cpu=16.0,
     timeout=86400,
+    volumes={_ARTIFACTS_VOLUME_MOUNT: _ARTIFACTS_VOLUME},
 )
 
 _FN_BUILDER = dict(
@@ -283,13 +302,46 @@ def _invoke_blend_realistic_main() -> None:
 
 
 def _run_blend_script(path: Path) -> None:
-    """Run one benchmark with unbuffered Python so logs stream to Modal."""
+    """Run one benchmark with unbuffered Python so logs stream to Modal.
+
+    Always persists whatever artifacts exist on disk to the durable
+    Volume in a ``finally``, so a crash or SIGKILL on script N still
+    leaves us with the outputs of scripts 1..N-1 (and any partial
+    checkpoint that script N managed to flush).
+    """
     print(f"[modal] running {path.name} …", flush=True)
-    subprocess.run(
-        [sys.executable, "-u", str(path)],
-        cwd=_CONTAINER_REPO,
-        check=True,
-    )
+    try:
+        subprocess.run(
+            [sys.executable, "-u", str(path)],
+            cwd=_CONTAINER_REPO,
+            check=True,
+        )
+    finally:
+        try:
+            _persist_artifacts_to_volume()
+        except Exception as e:  # pragma: no cover - best effort
+            print(f"[modal] volume persist failed after {path.name}: {e!r}", flush=True)
+
+
+def _persist_artifacts_to_volume() -> int:
+    """Mirror everything ``_collect_result_jsons`` would gather into the
+    persistent Volume and ``commit()`` so the data survives container
+    teardown.  Idempotent — re-runs overwrite identically named files
+    with the latest bytes.  Returns the number of files written.
+    """
+    artifacts = _collect_result_jsons()
+    if not artifacts:
+        return 0
+    base = Path(_ARTIFACTS_VOLUME_MOUNT)
+    n = 0
+    for rel, data in artifacts.items():
+        dest = base / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        n += 1
+    _ARTIFACTS_VOLUME.commit()
+    print(f"[modal] persisted {n} artifact(s) to volume '{_ARTIFACTS_VOLUME.name if hasattr(_ARTIFACTS_VOLUME, 'name') else 'compcache-artifacts'}'", flush=True)
+    return n
 
 
 def _collect_result_jsons() -> dict[str, bytes]:
@@ -316,6 +368,23 @@ def _collect_result_jsons() -> dict[str, bytes]:
             "*_3way*_ttft_hist.json",
             "*_3way*_ttft_hist.png",
             "*_recomp_sweep*_scores.json",
+            # Sparse-delta CompCache variants (blend_*_comp_delta.py).
+            "*_comp_delta_coretrieval.json",
+            "*_comp_delta_scores.json",
+            "*_comp_delta_ttft_warmup.json",
+            "*_comp_delta_ttft_warmup.png",
+            "*_comp_delta_ttft_hist.json",
+            "*_comp_delta_ttft_hist.png",
+            "*_comp_delta_vs_full.png",
+            # Memory-savings sweep (Test 1).
+            "*_delta_memory_scores.json",
+            "*_delta_memory_timeseries.png",
+            "*_delta_memory_tradeoff.png",
+            "*_delta_memory_ttft.png",
+            # Popularity / equal-bytes budget (Test 2).
+            "*_budget_scores.json",
+            "*_budget_main.png",
+            "*_budget_ttft_hist.png",
         ):
             for p in sorted(inputs_dir.glob(pattern)):
                 rel = prefix + p.name
@@ -331,6 +400,87 @@ def _save_results_locally(artifacts: dict[str, bytes]) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
         print(f"[local] saved {dest}")
+
+
+def _read_artifacts_from_volume(prefix: str = "") -> dict[str, bytes]:
+    """Read every file under the persistent Volume mount, optionally
+    filtered by a leading path ``prefix`` (e.g. ``"standard_qa/"``).
+
+    Returns the same ``{repo-relative-path: bytes}`` shape as
+    ``_collect_result_jsons`` so the result can be fed straight into
+    ``_save_results_locally``.
+    """
+    base = Path(_ARTIFACTS_VOLUME_MOUNT)
+    out: dict[str, bytes] = {}
+    if not base.exists():
+        print(f"[modal] volume mount {base} does not exist", flush=True)
+        return out
+    # Make sure we see writes from any concurrent container.
+    try:
+        _ARTIFACTS_VOLUME.reload()
+    except Exception as e:  # pragma: no cover - best effort
+        print(f"[modal] volume reload failed: {e!r}", flush=True)
+    for p in sorted(base.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = str(p.relative_to(base))
+        if prefix and not rel.startswith(prefix):
+            continue
+        out[rel] = p.read_bytes()
+    print(
+        f"[modal] read {len(out)} file(s) from volume "
+        f"(prefix={prefix!r})",
+        flush=True,
+    )
+    return out
+
+
+# CPU-only, no GPU — these just read a mounted Volume, so we must not
+# pay for an H100 every time we poll progress overnight.  Ephemeral
+# disk omitted — Modal enforces a 512 GiB minimum there, and we don't
+# need scratch space for a Volume read.
+_FN_VOLUME_CPU = dict(
+    cpu=2.0,
+    memory=4096,
+    timeout=3600,
+    volumes={_ARTIFACTS_VOLUME_MOUNT: _ARTIFACTS_VOLUME},
+)
+
+
+@app.function(**_fn_with_workspace_secrets(_FN_VOLUME_CPU))
+def pull_artifacts_from_volume(prefix: str = "") -> dict[str, bytes]:
+    """Snapshot the persistent artifact Volume into an in-memory dict.
+
+    Use the ``pull_artifacts`` local entrypoint to also write them to
+    your local disk.  ``prefix`` (optional) filters by Volume-relative
+    path, e.g. ``"standard_qa/"`` or ``"realistic_qa/inputs/foo_"``.
+    """
+    return _read_artifacts_from_volume(prefix=prefix)
+
+
+@app.function(**_fn_with_workspace_secrets(_FN_VOLUME_CPU))
+def list_artifacts_in_volume(prefix: str = "") -> list[tuple[str, int]]:
+    """Cheap listing (path, size_bytes) of what's currently on the Volume.
+
+    Useful to verify a long-running detached job is actually persisting
+    things without paying to download them all.
+    """
+    base = Path(_ARTIFACTS_VOLUME_MOUNT)
+    if not base.exists():
+        return []
+    try:
+        _ARTIFACTS_VOLUME.reload()
+    except Exception:
+        pass
+    rows: list[tuple[str, int]] = []
+    for p in sorted(base.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = str(p.relative_to(base))
+        if prefix and not rel.startswith(prefix):
+            continue
+        rows.append((rel, p.stat().st_size))
+    return rows
 
 
 def _collect_builder_outputs(mode: str, out: str, out_samsum: str) -> dict[str, bytes]:
@@ -520,7 +670,13 @@ def run_realistic_blend(
         f"promote_sync={promote_sync}",
         flush=True,
     )
-    _invoke_blend_realistic_main()
+    try:
+        _invoke_blend_realistic_main()
+    finally:
+        try:
+            _persist_artifacts_to_volume()
+        except Exception as e:  # pragma: no cover - best effort
+            print(f"[modal] volume persist failed after run_realistic_blend: {e!r}", flush=True)
     return _collect_result_jsons()
 
 
@@ -535,6 +691,7 @@ def run_all_blends() -> dict[str, bytes]:
     paths = sorted(
         p for p in ex_dir.glob(BLEND_PATTERN)
         if "_comp.py" not in p.name
+        and "_comp_delta.py" not in p.name
         and "_3way.py" not in p.name
         and "_sweep.py" not in p.name
     )
@@ -570,6 +727,100 @@ def standard_comp():
     with modal.enable_output():
         artifacts = run_all_blends_comp.remote()
     _save_results_locally(artifacts)
+
+
+@app.function(**_fn_with_workspace_secrets(_FN))
+def run_all_blends_comp_delta(
+    delta_top_k_ratio: float | None = None,
+    artifact_suffix: str | None = None,
+) -> dict[str, bytes]:
+    """Run every ``standard_qa/runners/blend_*_comp_delta.py``.
+
+    Identical pipeline to :func:`run_all_blends_comp` but each driver uses
+    the sparse-delta pair store instead of the full-joint one.  Artifacts
+    land under ``*_comp_delta_*`` so they coexist with a prior
+    ``standard_comp`` run on the same dataset.  Optional knobs override
+    the per-script defaults via env:
+
+    - ``delta_top_k_ratio``: sparsity for ``SparseDeltaPairStore`` (default 0.10).
+    - ``artifact_suffix``: override the ``comp_delta`` filename suffix.
+    """
+    _maybe_pin_cuda_visible_device0()
+    alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = alloc
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
+    if delta_top_k_ratio is not None:
+        os.environ["STANDARD_COMP_DELTA_TOP_K_RATIO"] = str(delta_top_k_ratio)
+    if artifact_suffix:
+        os.environ["STANDARD_COMP_ARTIFACT_SUFFIX"] = artifact_suffix
+
+    ex_dir = Path(_CONTAINER_RUNNERS)
+    paths = sorted(ex_dir.glob("blend_*_comp_delta.py"))
+    print(
+        f"[modal] run_all_blends_comp_delta: {len(paths)} script(s) "
+        f"top_k_ratio={delta_top_k_ratio} suffix={artifact_suffix!r}",
+        flush=True,
+    )
+    for path in paths:
+        _mistral_only(path)
+        _run_blend_script(path)
+    return _collect_result_jsons()
+
+
+@app.local_entrypoint()
+def standard_comp_delta(
+    delta_top_k_ratio: float | None = None,
+    artifact_suffix: str | None = None,
+):
+    """Run every delta-store CompCache benchmark (``blend_*_comp_delta.py``).
+
+    Pair with :func:`standard_comp` (the Full-Joint baseline) to compare
+    F1 / TTFT / memory.  Both write to the same ``standard_qa/inputs/``
+    directory under disjoint filename suffixes (``*_comp_*`` vs
+    ``*_comp_delta_*``).  If a matching ``*_comp_scores.json`` exists
+    locally for a dataset, this entrypoint also renders the
+    ``*_comp_delta_vs_full.png`` comparison plot on the local machine
+    after the Modal job completes — no extra GPU time needed.
+    """
+    with modal.enable_output():
+        artifacts = run_all_blends_comp_delta.remote(
+            delta_top_k_ratio=delta_top_k_ratio,
+            artifact_suffix=artifact_suffix,
+        )
+    _save_results_locally(artifacts)
+
+    # Post-hoc: for every *_comp_delta_scores.json we just saved, look
+    # for a sibling *_comp_scores.json and render the combined plot.
+    # This runs on the user's machine (no vLLM), so it's effectively
+    # free even when the Modal job took minutes.
+    inputs_dir = REPO_ROOT / "standard_qa" / "inputs"
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT / "standard_qa" / "runners"))
+    try:
+        from plot_delta_vs_full import plot_comparison  # type: ignore
+    except Exception as e:  # pragma: no cover
+        print(f"[local] skipping comparison plots ({e!r})")
+        return
+    for delta_scores in sorted(inputs_dir.glob("*_comp_delta_scores.json")):
+        stem = delta_scores.stem
+        if not stem.endswith("_comp_delta_scores"):
+            continue
+        base = stem[: -len("_comp_delta_scores")]
+        full_scores = inputs_dir / f"{base}_comp_scores.json"
+        if not full_scores.exists():
+            print(
+                f"[local] comparison plot skipped for {base}: "
+                f"no {full_scores.name} alongside"
+            )
+            continue
+        out = inputs_dir / f"{base}_comp_delta_vs_full.png"
+        try:
+            plot_comparison(str(full_scores), str(delta_scores), str(out))
+        except Exception as e:  # pragma: no cover
+            print(f"[local] plot_comparison failed for {base}: {e!r}")
 
 
 @app.function(**_fn_with_workspace_secrets(_FN))
@@ -728,6 +979,217 @@ def realistic(
             promote_sync=promote_sync,
         )
     _save_results_locally(artifacts)
+
+
+@app.local_entrypoint()
+def delta_memory(
+    dataset: str = "realistic_qa/inputs/extended_cacheblend.json",
+    # Entry cap — kept high so the byte budget is what actually shapes
+    # each store.  Set via REALISTIC_PAIR_STORE_CAP in the runner.
+    pair_store_capacity: int = 4096,
+    # Total bytes each pair store may hold.  Full-Joint and Sparse-Δ
+    # share the same budget; Δ configs naturally fit ~1/top_k_ratio
+    # more entries, which is the memory-savings story the benchmark
+    # demonstrates.  Defaults to 2 GiB.  Set to 0 to disable and fall
+    # back to entry-count-only eviction.
+    bytes_budget_gib: float = 2.0,
+    # Lowered from 10 → 0 so every co-retrieved pair is admitted on
+    # first sight (no waiting period).  At threshold=10 on the 1400-
+    # query extended_cacheblend stream only 17 of 10,314 unique pairs
+    # ever crossed the bar and the cache stayed empty until query ~1000.
+    promotion_threshold: int = 0,
+    # Selective-recomputation ratio passed into vLLM's cache_fuse_metadata.
+    # 0.18 matches the standard_qa comp/comp_delta sweeps so F1 numbers
+    # stay comparable across benchmarks.  Set to 0 to fall back to
+    # vLLM's built-in 0.16 default.
+    recomp_ratio: float = 0.18,
+    configs: str = "full,delta_r0.50,delta_r0.10",
+    skip_first: int = 0,
+    max_ctx_len: int = 8192,
+    max_model_len: int = 0,
+    # Three configs each clone KV tensors onto GPU inside assemble; we need
+    # more headroom than the 0.45 default so the vLLM block pool does not
+    # crowd our per-query working set (seen as CUDA OOM at ~830/1400).
+    # 0.30 was too low — weights alone take 13.5 GB on a 44 GB L40S so
+    # vLLM ended up with 0 KV blocks.  0.38 gives vLLM ~3 GB pool
+    # (~1200 blocks, plenty for single-seq generate) and keeps ~11 GB
+    # free for our per-query GPU clones + torch allocator workspace.
+    gpu_memory_utilization: float = 0.38,
+):
+    """Test 1 — memory-savings sweep on a single dataset.
+
+    Reuses ``run_realistic_blend`` but forces ``mode=delta_memory`` and
+    threads the config sweep through ``DELTA_MEMORY_CONFIGS``.  Produces
+    ``*_delta_memory_timeseries.png`` (memory MB vs query, one line per
+    config), ``*_delta_memory_tradeoff.png`` (peak MB vs mean F1 Pareto),
+    and ``*_delta_memory_ttft.png``.
+    """
+    extra_env = {"DELTA_MEMORY_CONFIGS": configs}
+    if bytes_budget_gib > 0:
+        extra_env["DELTA_MEMORY_BYTES_BUDGET"] = str(
+            int(bytes_budget_gib * (1024 ** 3))
+        )
+    if recomp_ratio > 0:
+        extra_env["REALISTIC_RECOMP_RATIO"] = f"{recomp_ratio:g}"
+    with modal.enable_output():
+        artifacts = _run_realistic_with_extra_env.remote(
+            dataset=dataset,
+            mode="delta_memory",
+            pair_store_capacity=pair_store_capacity,
+            promotion_threshold=promotion_threshold,
+            skip_first=skip_first,
+            max_ctx_len=max_ctx_len,
+            max_model_len=max_model_len,
+            gpu_memory_utilization=gpu_memory_utilization,
+            extra_env=extra_env,
+        )
+    _save_results_locally(artifacts)
+
+
+@app.local_entrypoint()
+def budget(
+    dataset: str = "realistic_qa/inputs/extended_cacheblend.json",
+    cap_full: int = 256,
+    delta_top_k_ratio: float = 0.10,
+    cap_delta: int = 0,
+    promotion_threshold: int = 10,
+    skip_first: int = 0,
+    max_ctx_len: int = 8192,
+    max_model_len: int = 0,
+    gpu_memory_utilization: float = 0.45,
+):
+    """Test 2 — popularity / equal-bytes budget revamped realistic eval.
+
+    Four methods per query: Full Prefill / CompCache-single / CompCache +
+    Full-LFU pairs (cap=``cap_full``) / CompCache + Δ-sparse-LFU pairs
+    at the matched bytes budget (cap ≈ cap_full / ratio).  ``cap_delta=0``
+    (default) lets the runner derive ``cap_delta`` from ``cap_full /
+    delta_top_k_ratio``; pass an explicit int to override.
+    """
+    with modal.enable_output():
+        artifacts = _run_realistic_with_extra_env.remote(
+            dataset=dataset,
+            mode="budget",
+            skip_first=skip_first,
+            max_ctx_len=max_ctx_len,
+            max_model_len=max_model_len,
+            gpu_memory_utilization=gpu_memory_utilization,
+            extra_env={
+                "REALISTIC_CAP_FULL": str(cap_full),
+                "REALISTIC_DELTA_TOP_K_RATIO": str(delta_top_k_ratio),
+                "REALISTIC_CAP_DELTA": str(cap_delta) if cap_delta > 0 else "",
+                "REALISTIC_PROMOTION_THRESHOLD": str(promotion_threshold),
+            },
+        )
+    _save_results_locally(artifacts)
+
+
+@app.function(**_fn_with_workspace_secrets(_FN))
+def _run_realistic_with_extra_env(
+    dataset: str,
+    mode: str,
+    *,
+    pair_store_capacity: int = 256,
+    promotion_threshold: int = 10,
+    skip_first: int = 0,
+    max_ctx_len: int = 8192,
+    max_model_len: int = 0,
+    gpu_memory_utilization: float = 0.45,
+    extra_env: dict | None = None,
+) -> dict[str, bytes]:
+    """Shared Modal function for the two new test modes.
+
+    Sets the usual ``REALISTIC_*`` env vars plus any ``extra_env`` overrides
+    (e.g. ``DELTA_MEMORY_CONFIGS`` or ``REALISTIC_CAP_FULL``) and invokes
+    ``blend_realistic.main`` in-process, then collects artifacts.
+    """
+    _maybe_pin_cuda_visible_device0()
+    alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = alloc
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
+    os.environ["REALISTIC_DATASET"] = dataset
+    os.environ["REALISTIC_SKIP_FIRST"] = str(skip_first)
+    os.environ["REALISTIC_GPU_MEMORY_UTILIZATION"] = str(gpu_memory_utilization)
+    os.environ["REALISTIC_MODE"] = mode
+    os.environ["REALISTIC_PAIR_STORE_CAP"] = str(pair_store_capacity)
+    os.environ["REALISTIC_PROMOTION_THRESHOLD"] = str(promotion_threshold)
+    if max_ctx_len > 0:
+        os.environ["REALISTIC_MAX_CTX_LEN"] = str(max_ctx_len)
+    else:
+        os.environ.pop("REALISTIC_MAX_CTX_LEN", None)
+    if max_model_len > 0:
+        os.environ["REALISTIC_MAX_MODEL_LEN"] = str(max_model_len)
+    else:
+        os.environ.pop("REALISTIC_MAX_MODEL_LEN", None)
+    for k, v in (extra_env or {}).items():
+        if v == "":
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+    path = _realistic_py_path()
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    _mistral_only(path)
+    print(
+        f"[modal] {mode}: dataset={dataset} "
+        f"extra_env={sorted((extra_env or {}).items())}",
+        flush=True,
+    )
+    try:
+        _invoke_blend_realistic_main()
+    finally:
+        try:
+            _persist_artifacts_to_volume()
+        except Exception as e:  # pragma: no cover - best effort
+            print(f"[modal] volume persist failed after {mode}: {e!r}", flush=True)
+    return _collect_result_jsons()
+
+
+@app.local_entrypoint()
+def pull_artifacts(prefix: str = ""):
+    """Download every artifact persisted to the ``compcache-artifacts``
+    Modal Volume by prior runs and write them under the matching local
+    ``standard_qa/inputs/`` / ``realistic_qa/inputs/`` directory.
+
+    Safe to invoke any time — even while another detached job is still
+    running — because the writers commit after every script.  Existing
+    local files are overwritten with the latest Volume copy.
+
+    Examples::
+
+        modal run modal_runner.py::pull_artifacts
+        modal run modal_runner.py::pull_artifacts --prefix standard_qa/
+        modal run modal_runner.py::pull_artifacts \\
+            --prefix standard_qa/inputs/hotpotqa_s_comp_delta
+    """
+    with modal.enable_output():
+        artifacts = pull_artifacts_from_volume.remote(prefix=prefix)
+    if not artifacts:
+        print(
+            f"[local] no artifacts found on volume "
+            f"(prefix={prefix!r})"
+        )
+        return
+    _save_results_locally(artifacts)
+
+
+@app.local_entrypoint()
+def list_artifacts(prefix: str = ""):
+    """List ``(path, size)`` for every file currently on the artifact
+    Volume — quick sanity check that a detached run is persisting data.
+    """
+    with modal.enable_output():
+        rows = list_artifacts_in_volume.remote(prefix=prefix)
+    if not rows:
+        print(f"[local] volume empty (prefix={prefix!r})")
+        return
+    total = sum(sz for _, sz in rows)
+    for rel, sz in rows:
+        print(f"  {sz:>12,d}  {rel}")
+    print(f"[local] {len(rows)} file(s), {total:,} bytes total")
 
 
 @app.local_entrypoint()

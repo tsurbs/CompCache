@@ -26,6 +26,11 @@ from utils import (  # noqa: E402
 from kv_fifo_cache import FIFOChunkKVCache  # noqa: E402
 
 from comp_blend_eval import _chunk_cache_key, run_blend_eval_comp  # noqa: E402
+from delta_memory_eval import (  # noqa: E402
+    _parse_config as _parse_delta_config,
+    run_delta_memory_eval,
+)
+from popularity_budget_eval import run_popularity_budget_eval  # noqa: E402
 from three_way_eval import run_blend_eval_three_way  # noqa: E402
 
 query_prompt = (
@@ -400,6 +405,13 @@ def main() -> None:
         max_model_len = max_ctx_len + 2048
 
     mode = os.environ.get("REALISTIC_MODE", "fifo").lower()
+
+    # ``recomp_ratio`` overrides vLLM's cache_fuse_metadata default (0.16).
+    # Set via env so every realistic mode honours the same knob; leave
+    # unset to fall back to vLLM's built-in default.
+    recomp_raw = os.environ.get("REALISTIC_RECOMP_RATIO")
+    recomp_ratio = float(recomp_raw) if recomp_raw else None
+
     common_kwargs = dict(
         dataset_path=dataset_path,
         prefix_prompt=(
@@ -415,6 +427,7 @@ def main() -> None:
         s_end=[733, 28748, 16289, 28793],
         suffix_is_query_len=False,
         max_tokens=32,
+        recomp_ratio=recomp_ratio,
         model_name="mistralai/Mistral-7B-Instruct-v0.2",
         gpu_memory_utilization=gpu_memory_utilization,
         max_model_len=max_model_len,
@@ -453,10 +466,65 @@ def main() -> None:
             **common_kwargs,
             pair_store_capacity=pair_cap,
         )
+    elif mode == "delta_memory":
+        # Test 1 — memory-savings sweep on a single dataset (full GPU eval).
+        # Defaults tuned for "cache fills immediately":
+        #   - promotion_threshold=0 so every co-retrieved pair is admitted
+        #     on first sight (vs threshold=10 which kept the store empty
+        #     for ~1000 queries on the extended_cacheblend stream).
+        #   - pair_store_capacity=4096 so the entry ceiling is never the
+        #     binding constraint and the byte budget is what actually
+        #     shapes the cache across configs.
+        #   - pair_store_bytes_budget gives Full-Joint and Sparse-Δ the
+        #     same memory to work with; Δ mechanically fits more pairs
+        #     (by 1/top_k_ratio), which is the story this benchmark tells.
+        pair_cap = int(os.environ.get("REALISTIC_PAIR_STORE_CAP", "4096"))
+        prom_t = int(os.environ.get("REALISTIC_PROMOTION_THRESHOLD", "0"))
+        bytes_env = os.environ.get("DELTA_MEMORY_BYTES_BUDGET", "").strip()
+        bytes_budget = int(bytes_env) if bytes_env else None
+        configs_raw = os.environ.get(
+            "DELTA_MEMORY_CONFIGS", "full,delta_r0.50,delta_r0.10"
+        )
+        configs = [
+            _parse_delta_config(tok) for tok in configs_raw.split(",") if tok.strip()
+        ]
+        print(
+            f"[mode=delta_memory] pair_store_cap={pair_cap} "
+            f"promotion_threshold={prom_t} "
+            f"bytes_budget={bytes_budget!r} configs={configs_raw}"
+        )
+        run_delta_memory_eval(
+            **common_kwargs,
+            pair_store_capacity=pair_cap,
+            pair_store_bytes_budget=bytes_budget,
+            promotion_threshold=prom_t,
+            configs=configs,
+        )
+    elif mode == "budget":
+        # Test 2 — popularity / equal-bytes-budget revamped realistic eval.
+        cap_full = int(os.environ.get("REALISTIC_CAP_FULL", "256"))
+        delta_ratio = float(os.environ.get("REALISTIC_DELTA_TOP_K_RATIO", "0.1"))
+        cap_delta_env = os.environ.get("REALISTIC_CAP_DELTA", "")
+        cap_delta = int(cap_delta_env) if cap_delta_env else None
+        prom_t = int(os.environ.get("REALISTIC_PROMOTION_THRESHOLD", "10"))
+        print(
+            f"[mode=budget] cap_full={cap_full} delta_ratio={delta_ratio} "
+            f"cap_delta={cap_delta} promotion_threshold={prom_t}"
+        )
+        run_popularity_budget_eval(
+            **common_kwargs,
+            cap_full=cap_full,
+            delta_top_k_ratio=delta_ratio,
+            cap_delta=cap_delta,
+            promotion_threshold=prom_t,
+        )
     elif mode == "fifo":
         run_blend_eval_fifo(**common_kwargs)
     else:
-        raise ValueError(f"Unknown REALISTIC_MODE={mode!r}; expected 'fifo', 'comp', or '3way'")
+        raise ValueError(
+            f"Unknown REALISTIC_MODE={mode!r}; expected 'fifo', 'comp', '3way', "
+            f"'delta_memory', or 'budget'"
+        )
 
 
 if __name__ == "__main__":

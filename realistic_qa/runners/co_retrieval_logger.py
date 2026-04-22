@@ -24,8 +24,15 @@ PairKey = Tuple[str, str]
 
 class CoRetrievalLogger:
     def __init__(self, promotion_threshold: int = 10) -> None:
-        if promotion_threshold < 2:
-            raise ValueError("promotion_threshold must be >= 2")
+        # ``threshold=0`` means "promote on the very first co-retrieval" —
+        # after the ``+= 1`` in :meth:`record` the count is 1 which is
+        # ``>= 0`` so the pair flags immediately.  Equivalent to
+        # ``threshold=1`` (functionally; we accept both so callers can
+        # express "no threshold" literally).  Negative thresholds are
+        # rejected because they'd flag every pair on every query before
+        # the counter even increments.
+        if promotion_threshold < 0:
+            raise ValueError("promotion_threshold must be >= 0")
         self.promotion_threshold = promotion_threshold
         self.pair_counts: collections.Counter[PairKey] = collections.Counter()
         self.queries_seen = 0

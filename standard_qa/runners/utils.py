@@ -496,6 +496,9 @@ def run_blend_eval_comp(
     pair_store_capacity=None,
     promotion_threshold=10,
     promote_sync=False,
+    pair_store_kind=None,
+    delta_top_k_ratio=None,
+    artifact_suffix=None,
 ):
     """CompCache (standard QA): same metrics and TTFT plots as realistic comp; order matches ``run_blend_eval`` (no shuffle).
 
@@ -569,6 +572,42 @@ def run_blend_eval_comp(
         else:
             effective_pair = 128
 
+    # --- Delta-store knobs ---------------------------------------------
+    # Kept as keyword params so the existing ``blend_*_comp.py`` scripts
+    # (which never pass these) preserve their historical behaviour (full
+    # joint pair store, default r=0.1 unused, default ``_comp_*``
+    # artifact suffix).  Env overrides let you rerun the whole suite
+    # under a new store kind without editing each driver.
+    effective_kind = pair_store_kind
+    raw_k = os.environ.get("STANDARD_COMP_PAIR_STORE_KIND")
+    if raw_k is not None and raw_k.strip() != "":
+        effective_kind = raw_k.strip()
+    if effective_kind is None:
+        effective_kind = "full"
+
+    effective_topk = delta_top_k_ratio
+    raw_t = os.environ.get("STANDARD_COMP_DELTA_TOP_K_RATIO")
+    if raw_t is not None and raw_t.strip() != "":
+        try:
+            effective_topk = float(raw_t)
+        except ValueError:
+            pass
+    if effective_topk is None:
+        effective_topk = 0.1
+
+    effective_suffix = artifact_suffix
+    raw_s = os.environ.get("STANDARD_COMP_ARTIFACT_SUFFIX")
+    if raw_s is not None and raw_s.strip() != "":
+        effective_suffix = raw_s.strip()
+    if effective_suffix is None:
+        # Default suffix depends on the store kind so Full vs Delta
+        # artifacts never clobber each other even if someone forgets to
+        # pass one explicitly.
+        effective_suffix = (
+            "comp" if effective_kind.lower() in ("full", "full_joint", "joint")
+            else "comp_delta"
+        )
+
     _repo = Path(__file__).resolve().parents[2]
     _rr = str(_repo / "realistic_qa" / "runners")
     if _rr not in sys.path:
@@ -599,10 +638,13 @@ def run_blend_eval_comp(
         skip_first=0,
         fifo_max_chunks=effective_fifo,
         pair_store_capacity=effective_pair,
+        pair_store_kind=effective_kind,
+        delta_top_k_ratio=effective_topk,
         promotion_threshold=promotion_threshold,
         promote_sync=promote_sync,
         shuffle_dataset=False,
         standard_qa=True,
+        artifact_suffix=effective_suffix,
     )
 
 

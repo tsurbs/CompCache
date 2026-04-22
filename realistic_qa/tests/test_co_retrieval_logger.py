@@ -70,4 +70,16 @@ def test_save_and_load_round_trip(tmp_path: Path):
 
 def test_rejects_bad_threshold():
     with pytest.raises(ValueError):
-        CoRetrievalLogger(promotion_threshold=1)
+        CoRetrievalLogger(promotion_threshold=-1)
+
+
+def test_threshold_zero_flags_on_first_co_retrieval():
+    # ``threshold=0`` means "no waiting period": the pair flags as soon
+    # as its post-increment count (1) crosses 0.  Matches threshold=1
+    # semantically; we accept both so callers can express "admit every
+    # pair on first sight" literally.
+    logger = CoRetrievalLogger(promotion_threshold=0)
+    flagged = logger.record(["a", "b", "c"])
+    assert set(flagged) == {("a", "b"), ("a", "c"), ("b", "c")}
+    # Each pair flags exactly once.
+    assert logger.record(["a", "b"]) == []

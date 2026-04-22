@@ -15,9 +15,13 @@ _COMP = _RUNNERS / "comp_blend_eval.py"
 def test_comp_module_defines_run_blend_eval_comp_and_ttft_reports():
     s = _COMP.read_text(encoding="utf-8")
     assert "def run_blend_eval_comp(" in s
-    assert "_comp_coretrieval.json" in s
-    assert "_comp_scores.json" in s
-    assert 'name_suffix="_comp"' in s
+    # Artifact names are parameterised on ``artifact_suffix`` (default
+    # ``"comp"``) so ``*_comp_*`` names are preserved historically while
+    # alternative variants (e.g. ``artifact_suffix="comp_delta"``) can
+    # coexist on the same dataset without clobbering.
+    assert 'artifact_suffix: str = "comp"' in s
+    assert "_coretrieval.json" in s
+    assert "_scores.json" in s
     assert "CompCache (composition-aware)" in s
     assert "save_ttft_warmup_plot(" in s
     assert "save_ttft_histogram(" in s

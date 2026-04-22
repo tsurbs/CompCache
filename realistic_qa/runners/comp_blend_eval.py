@@ -63,14 +63,21 @@ def run_blend_eval_comp(
     promote_sync: bool = False,
     shuffle_dataset: bool = True,
     standard_qa: bool = False,
+    artifact_suffix: str = "comp",
 ):
     """Composition-aware CacheBlend (Proposal §3.1).
 
-    Writes ``*_comp_coretrieval.json``, ``*_comp_scores.json``,
-    ``*_comp_ttft_warmup.{json,png}``, ``*_comp_ttft_hist.{json,png}``.
+    Writes ``*_<artifact_suffix>_coretrieval.json``,
+    ``*_<artifact_suffix>_scores.json``,
+    ``*_<artifact_suffix>_ttft_warmup.{json,png}``,
+    ``*_<artifact_suffix>_ttft_hist.{json,png}``.  Default suffix is
+    ``"comp"`` to preserve the historical ``*_comp_*`` names.  Pass a
+    different suffix (e.g. ``"comp_delta"``) when running a delta-store
+    variant on the same dataset so the two artifact sets do not clobber
+    each other.
 
     Set ``standard_qa=True`` when called from ``standard_qa/runners/utils`` so
-    ``*_comp_scores.json`` includes ``"eval": "standard_comp"``.
+    ``*_<artifact_suffix>_scores.json`` includes ``"eval": "standard_comp"``.
     """
     import numpy as np
     import torch
@@ -308,13 +315,14 @@ def run_blend_eval_comp(
         "delta_top_k_ratio": delta_top_k_ratio,
     })
 
-    output_path = dataset_path.replace(".json", "_comp_coretrieval.json")
+    suffix = artifact_suffix or "comp"
+    output_path = dataset_path.replace(".json", f"_{suffix}_coretrieval.json")
     with open(output_path, "w") as f:
         json.dump(coret_stats, f, indent=2, default=str)
     print(f"\nComposition-cache stats saved to {output_path}")
 
     scores_path = Path(dataset_path).resolve()
-    scores_path = scores_path.with_name(f"{scores_path.stem}_comp_scores.json")
+    scores_path = scores_path.with_name(f"{scores_path.stem}_{suffix}_scores.json")
     scores_payload = {
         "metric_name": metric_name,
         f"{metric_name}_blend": [float(x) for x in metric_blend],
@@ -363,14 +371,14 @@ def run_blend_eval_comp(
         fifo_stats=fifo_stat_dict,
         roll_window=roll_window,
         cached_label="CompCache (composition-aware)",
-        name_suffix="_comp",
+        name_suffix=f"_{suffix}",
     )
     save_ttft_histogram(
         dataset_path,
         ttft_blend,
         ttft_full,
         cached_label="CompCache (composition-aware)",
-        name_suffix="_comp",
+        name_suffix=f"_{suffix}",
         extra_metadata=hist_meta,
     )
 
