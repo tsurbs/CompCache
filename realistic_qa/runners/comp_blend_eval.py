@@ -1,4 +1,3 @@
-"""Shared composition-cache (CompCache) evaluation for realistic and standard QA."""
 from __future__ import annotations
 
 import hashlib
@@ -13,15 +12,13 @@ _SQ_RUNNERS = str(_REPO_ROOT / "standard_qa" / "runners")
 if _SQ_RUNNERS not in sys.path:
     sys.path.insert(0, _SQ_RUNNERS)
 
-from utils import CoRetrievalTracker, get_doc_ids, load_dataset  # noqa: E402
-from ttft_reporting import save_ttft_histogram, save_ttft_warmup_plot  # noqa: E402
-
-from co_retrieval_logger import CoRetrievalLogger  # noqa: E402
-from composition_cache import CompositionCache  # noqa: E402
-from kv_fifo_cache import FIFOChunkKVCache  # noqa: E402
-from pair_kv_store import FullJointPairStore, SparseDeltaPairStore  # noqa: E402
-from promotion_worker import PromotionWorker  # noqa: E402
-
+from utils import CoRetrievalTracker, get_doc_ids, load_dataset
+from ttft_reporting import save_ttft_histogram, save_ttft_warmup_plot
+from co_retrieval_logger import CoRetrievalLogger
+from composition_cache import CompositionCache
+from kv_fifo_cache import FIFOChunkKVCache
+from pair_kv_store import FullJointPairStore, SparseDeltaPairStore
+from promotion_worker import PromotionWorker
 
 def _chunk_cache_key(chunk_index: int, token_ids: list[int]) -> str:
     if chunk_index == 0:
@@ -30,7 +27,6 @@ def _chunk_cache_key(chunk_index: int, token_ids: list[int]) -> str:
     for t in token_ids:
         h.update(t.to_bytes(4, "little", signed=False))
     return f"ctx:{h.hexdigest()}"
-
 
 def run_blend_eval_comp(
     dataset_path: str,
@@ -65,20 +61,6 @@ def run_blend_eval_comp(
     standard_qa: bool = False,
     artifact_suffix: str = "comp",
 ):
-    """Composition-aware CacheBlend (Proposal §3.1).
-
-    Writes ``*_<artifact_suffix>_coretrieval.json``,
-    ``*_<artifact_suffix>_scores.json``,
-    ``*_<artifact_suffix>_ttft_warmup.{json,png}``,
-    ``*_<artifact_suffix>_ttft_hist.{json,png}``.  Default suffix is
-    ``"comp"`` to preserve the historical ``*_comp_*`` names.  Pass a
-    different suffix (e.g. ``"comp_delta"``) when running a delta-store
-    variant on the same dataset so the two artifact sets do not clobber
-    each other.
-
-    Set ``standard_qa=True`` when called from ``standard_qa/runners/utils`` so
-    ``*_<artifact_suffix>_scores.json`` includes ``"eval": "standard_comp"``.
-    """
     import numpy as np
     import torch
     from itertools import chain

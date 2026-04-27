@@ -1,16 +1,3 @@
-"""Async background worker that materializes joint pair KV caches.
-
-Given a pair (d_a, d_b) and their tokenized forms, the worker runs a single
-collection forward on the concatenation ``tokens_a ‖ tokens_b`` on the same
-vLLM engine used by the main eval loop, extracts the per-layer KV slice, and
-writes it to the pair store.
-
-A shared :class:`threading.Lock` coordinates GPU access with the main loop:
-main-loop forwards and worker forwards never interleave, but the main loop
-releases the lock between queries so the worker gets to run. That gives the
-triggering query amortized zero cost for promotion while guaranteeing vLLM
-never sees concurrent requests.
-"""
 from __future__ import annotations
 
 import queue
@@ -18,7 +5,6 @@ import threading
 from typing import Callable, List, Optional
 
 from pair_kv_store import PairKVStore, StackedLayers
-
 
 class PromotionJob:
     __slots__ = (
@@ -44,20 +30,12 @@ class PromotionJob:
         self.doc_b = doc_b
         self.tokens_a = list(tokens_a)
         self.tokens_b = list(tokens_b)
-        # Delta stores need the individual per-chunk KVs to compute the
-        # delta at put-time. Full-joint stores ignore these.
+        
+        
         self.individual_a = individual_a
         self.individual_b = individual_b
 
-
 class PromotionWorker(threading.Thread):
-    """Runs one pair-concat forward pass per job, writes result to pair store.
-
-    The caller injects ``run_collection_forward`` — a callback that already
-    knows how to invoke vLLM with ``collect=True`` and return the per-layer
-    KV list for a token sequence. Keeping vLLM outside this module makes the
-    worker unit-testable with a stub.
-    """
 
     def __init__(
         self,
@@ -73,17 +51,16 @@ class PromotionWorker(threading.Thread):
         self._run = run_collection_forward
         self.gpu_lock = gpu_lock
         self.queue: "queue.Queue[Optional[PromotionJob]]" = queue.Queue(maxsize=max_queue_size)
-        # Must not use ``_stop``: ``threading.Thread`` reserves that name for ``join()``.
+        
         self._stop_event = threading.Event()
         self._log_prefix = log_prefix
         self.completed = 0
         self.errors = 0
         self.dropped = 0
 
-    # ---- public API -------------------------------------------------------
+    
 
     def enqueue(self, job: PromotionJob) -> bool:
-        """Non-blocking enqueue. Drops the job if the queue is full."""
         try:
             self.queue.put_nowait(job)
             return True
@@ -92,18 +69,16 @@ class PromotionWorker(threading.Thread):
             return False
 
     def stop(self, *, drain: bool = False) -> None:
-        """Signal shutdown. If ``drain``, wait for pending jobs to complete."""
         if drain:
             self.queue.join()
         self._stop_event.set()
-        # Poison pill to unblock the get() call.
+        
         try:
             self.queue.put_nowait(None)
         except queue.Full:
             pass
 
     def promote_sync(self, job: PromotionJob) -> None:
-        """Run one job on the calling thread (still under the GPU lock)."""
         self._process(job)
 
     def stats(self) -> dict:
@@ -115,9 +90,9 @@ class PromotionWorker(threading.Thread):
             "running": self.is_alive(),
         }
 
-    # ---- thread body ------------------------------------------------------
+    
 
-    def run(self) -> None:  # pragma: no cover - exercised via integration
+    def run(self) -> None:  
         while not self._stop_event.is_set():
             try:
                 item = self.queue.get(timeout=0.25)
@@ -132,20 +107,20 @@ class PromotionWorker(threading.Thread):
                 self.queue.task_done()
 
     def _process(self, job: PromotionJob) -> None:
-        # Skip the expensive forward if the pair is already materialized.
-        # At threshold=0 the logger flags on every first-seen pair; in
-        # dense streams the same canonical pair can also be re-flagged
-        # after eviction.  Without this guard we'd run a ~4k-token
-        # forward per redundant enqueue, which blew the H100's CUDA
-        # allocator past 77 GiB by query ~20 on the 2 GiB-budgeted
-        # delta_memory eval.
+        
+        
+        
+        
+        
+        
+        
         try:
             if self.pair_store.contains(job.doc_a, job.doc_b):
                 self.completed += 1
                 return
         except Exception:
-            # Store implementations should not raise here, but don't let
-            # a contains() bug take down the whole worker.
+            
+            
             pass
 
         concat = job.tokens_a + job.tokens_b
@@ -160,16 +135,16 @@ class PromotionWorker(threading.Thread):
                 individual_b=job.individual_b,
             )
             self.completed += 1
-        except Exception as exc:  # pragma: no cover - logged at runtime
+        except Exception as exc:  
             self.errors += 1
             print(f"{self._log_prefix} FAILED ({job.doc_a}, {job.doc_b}): {exc}", flush=True)
         finally:
-            # ``joint_layers`` is a list of per-layer tensor clones on GPU;
-            # ``pair_store.put`` either deep-clones to CPU (``store_on_cpu``)
-            # or keeps only a sparsified delta.  Either way the transient
-            # GPU copy can be released immediately.  Without this the
-            # allocator carried each promotion's reserved blocks forward
-            # and saturated an H100 after ~200 promotions.
+            
+            
+            
+            
+            
+            
             try:
                 del joint_layers  # noqa: F821 — may not exist if pre-check fired
             except Exception:

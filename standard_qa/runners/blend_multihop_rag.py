@@ -1,7 +1,5 @@
 from utils import build_qa_prompt, compute_f1, run_blend_eval
 
-# Expect standard_qa/inputs/multihop_rag_s.json: list of
-# {"question", "ctxs": [{"title", "text"}, ...], "answers": ["gold", ...]}
 query_prompt = (
     "\n\nAnswer the question directly based on the given passages."
     " Do NOT repeat the question."

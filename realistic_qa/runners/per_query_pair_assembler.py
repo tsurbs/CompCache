@@ -1,20 +1,3 @@
-"""Per-query no-cache pair assembler used by the standard QA 3-way runner.
-
-For each query, the retrieved doc list ``[d0, d1, d2, d3, ...]`` is grouped into
-adjacent disjoint pairs ``[(d0, d1), (d2, d3), ...]``. For each pair we run a
-*joint* prefill forward (``[d_i + d_{i+1}]``) and snapshot the resulting per-pair
-KV; we then concatenate those pair-KVs (plus instruction prefix and query
-suffix KVs) and hand them to vLLM via ``model_ref.old_kvs`` exactly as the
-existing CompCache assemble does. No caching across queries.
-
-Operationally this simulates a 100% pair-store hit rate without needing
-cross-query reuse: every pair we will look at *is* freshly computed and used
-on the same query.
-
-The function returns the same ``(input_ids, kvs, reordered_chunks, stats)``
-tuple as :meth:`composition_cache.CompositionCache.assemble` so the caller in
-``three_way_eval`` can swap implementations without touching the model code.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -25,7 +8,6 @@ import torch
 from composition_cache import CollectionForward, PairForward, QueryStats
 from kv_fifo_cache import FIFOChunkKVCache, StackedLayers
 
-
 def _append_layers(acc: StackedLayers, added: StackedLayers) -> None:
     if not acc:
         for k, v in added:
@@ -34,7 +16,6 @@ def _append_layers(acc: StackedLayers, added: StackedLayers) -> None:
     for j, (k, v) in enumerate(added):
         acc[j][0] = torch.cat((acc[j][0], k), dim=0)
         acc[j][1] = torch.cat((acc[j][1], v), dim=0)
-
 
 def assemble_pairs_per_query(
     *,
@@ -50,23 +31,6 @@ def assemble_pairs_per_query(
     s_start_1_len: int,
     individual_cache: Optional[FIFOChunkKVCache] = None,
 ) -> Tuple[List[int], StackedLayers, List[List[int]], QueryStats]:
-    """Per-query joint-pair assembler with no cross-query pair caching.
-
-    Pairing strategy: greedy adjacent — ``(d_0, d_1), (d_2, d_3), ...``. If the
-    retrieval list has odd length, the last doc is forwarded as a singleton
-    chunk via ``run_chunk_forward``.
-
-    ``individual_cache`` (optional) is consulted only for the instruction
-    prefix and query suffix (the common-prefix part most workloads will hit on
-    repeated queries); the per-pair joint KVs are NEVER stored there. The
-    purpose is just to avoid re-encoding the instruction every query when the
-    realistic runner hands us a stateful FIFO. Pass ``None`` for "no caching
-    at all" semantics.
-
-    ``stats.pair_hits`` is incremented for every pair we actually used (so the
-    +pairs path reports a 100% hit rate on every query), while
-    ``stats.individual_*`` track the prefix/suffix/odd-out chunks.
-    """
     n_docs = len(retrieval_doc_ids)
     assert len(doc_chunk_ids) == n_docs + 2, (
         f"expected {n_docs + 2} chunks (instr + {n_docs} docs + query), "
@@ -139,7 +103,6 @@ def assemble_pairs_per_query(
 
     stats.matched_pairs = matched_pairs
     return input_ids, chunk_past_key_values, reordered_chunks, stats
-
 
 def _get_or_collect_individual(
     *,

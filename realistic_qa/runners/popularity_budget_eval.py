@@ -1,28 +1,3 @@
-"""Test 2: revamped "realistic" eval with an LFU-by-pair pair store, where
-the memory savings of :class:`SparseDeltaPairStore` are spent on caching
-MORE pairs at the same bytes budget as :class:`FullJointPairStore`.
-
-Each query streams through four methods on a shared vLLM engine (each
-with its own FIFO / pair store / logger so state is honest):
-
-1. ``full``   — vanilla prefill, no caching (upper bound on TTFT, ground truth for F1).
-2. ``single`` — CompCache with the pair path disabled (CacheBlend single-chunk).
-3. ``lfu_full``  — CompCache + :class:`FullJointPairStore` with
-   ``evict_policy="lfu"``; priority is the running co-retrieval count
-   from a per-method :class:`CoRetrievalLogger`.  Capacity: ``cap_full``.
-4. ``lfu_delta`` — CompCache + :class:`SparseDeltaPairStore` with
-   ``top_k_ratio=r`` and the same LFU priority policy.  Capacity:
-   ``cap_delta ≈ cap_full / r`` so the asymptotic BYTES footprint
-   matches method 3 — we spend the delta savings on more entries, not
-   on less memory.
-
-Artifacts written next to the dataset:
-
-- ``{stem}_budget_scores.json`` — per-method per-query series + summary.
-- ``{stem}_budget_main.png`` — 2x2 grid: rolling TTFT, cumulative pair
-  hit rate, mean metric (bar), bytes_used over time.
-- ``{stem}_budget_ttft_hist.png`` — TTFT density overlay, all four methods.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -40,18 +15,16 @@ _SQ_RUNNERS = str(_REPO_ROOT / "standard_qa" / "runners")
 if _SQ_RUNNERS not in sys.path:
     sys.path.insert(0, _SQ_RUNNERS)
 
-from utils import CoRetrievalTracker, get_doc_ids, load_dataset  # noqa: E402
-
-from co_retrieval_logger import CoRetrievalLogger  # noqa: E402
-from composition_cache import CompositionCache  # noqa: E402
-from kv_fifo_cache import FIFOChunkKVCache  # noqa: E402
-from pair_kv_store import (  # noqa: E402
+from utils import CoRetrievalTracker, get_doc_ids, load_dataset
+from co_retrieval_logger import CoRetrievalLogger
+from composition_cache import CompositionCache
+from kv_fifo_cache import FIFOChunkKVCache
+from pair_kv_store import (
     FullJointPairStore,
     PairKVStore,
     SparseDeltaPairStore,
 )
-from promotion_worker import PromotionWorker  # noqa: E402
-
+from promotion_worker import PromotionWorker
 
 METHOD_FULL = "full"
 METHOD_SINGLE = "single"
@@ -72,7 +45,6 @@ METHOD_COLORS = {
     METHOD_LFU_DELTA: "#9467bd",
 }
 
-
 @dataclass
 class MethodState:
     name: str
@@ -82,13 +54,12 @@ class MethodState:
     pair_hits: List[int] = field(default_factory=list)
     pair_misses: List[int] = field(default_factory=list)
     memory_log: List[Tuple[int, int, int]] = field(default_factory=list)
-    # Filled only for LFU methods
+    
     fifo: Optional[FIFOChunkKVCache] = None
     pair_store: Optional[PairKVStore] = None
     logger: Optional[CoRetrievalLogger] = None
     worker: Optional[PromotionWorker] = None
     composition: Optional[CompositionCache] = None
-
 
 def _chunk_cache_key(chunk_index: int, token_ids: List[int]) -> str:
     if chunk_index == 0:
@@ -97,196 +68,6 @@ def _chunk_cache_key(chunk_index: int, token_ids: List[int]) -> str:
     for t in token_ids:
         h.update(t.to_bytes(4, "little", signed=False))
     return f"ctx:{h.hexdigest()}"
-
-
-# --------------------------------------------------------------------------- #
-# Plotting                                                                    #
-# --------------------------------------------------------------------------- #
-
-
-def _rolling_mean(xs, w: int):
-    import numpy as np
-    a = np.asarray(xs, dtype=float)
-    if w <= 1 or a.size < w:
-        return np.arange(a.size, dtype=float), a
-    k = np.ones(w, dtype=float) / w
-    y = np.convolve(a, k, mode="valid")
-    x = np.arange(w - 1, a.size, dtype=float)
-    return x, y
-
-
-def _plot_main_grid(
-    output_png: Path,
-    states: dict[str, MethodState],
-    *,
-    metric_name: str,
-    roll_window: int,
-    dataset_label: str,
-    budget_mb_target: Optional[float],
-) -> Optional[Path]:
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
-    except ImportError:
-        return None
-
-    fig, axes = plt.subplots(2, 2, figsize=(14, 9.5), layout="constrained")
-    ax_tt, ax_hr, ax_f1, ax_mb = axes.flatten()
-
-    # ---- Panel 1: rolling TTFT ----
-    for m in METHODS:
-        st = states[m]
-        if not st.ttft:
-            continue
-        color = METHOD_COLORS[m]
-        raw_ms = np.asarray(st.ttft) * 1e3
-        ax_tt.plot(
-            np.arange(raw_ms.size), raw_ms,
-            color=color, lw=0.6, alpha=0.28,
-        )
-        xs, ys = _rolling_mean(raw_ms, roll_window)
-        ax_tt.plot(
-            xs, ys,
-            color=color, lw=2.2,
-            label=f"{METHOD_LABELS[m]}  (mean {raw_ms.mean():.1f} ms)",
-        )
-    ax_tt.set_xlabel("Query index")
-    ax_tt.set_ylabel("Prefill TTFT (ms)")
-    ax_tt.set_title(f"TTFT — rolling {roll_window}-query mean")
-    ax_tt.grid(True, alpha=0.3)
-    ax_tt.legend(loc="upper right", fontsize=8, framealpha=0.9)
-
-    # ---- Panel 2: cumulative pair hit rate ----
-    for m in (METHOD_LFU_FULL, METHOD_LFU_DELTA):
-        st = states[m]
-        if not st.pair_hits:
-            continue
-        hits = np.asarray(st.pair_hits, dtype=float)
-        misses = np.asarray(st.pair_misses, dtype=float)
-        # Cumulative hits / (hits + misses). Division-by-zero guarded.
-        num = np.cumsum(hits)
-        den = np.cumsum(hits + misses)
-        rate = np.where(den > 0, num / np.maximum(den, 1.0), 0.0) * 100.0
-        ax_hr.plot(
-            np.arange(rate.size), rate,
-            color=METHOD_COLORS[m], lw=2.2,
-            label=f"{METHOD_LABELS[m]}  (final {rate[-1]:.1f}%)" if rate.size else METHOD_LABELS[m],
-        )
-    ax_hr.set_xlabel("Query index")
-    ax_hr.set_ylabel("Cumulative pair hit rate (%)")
-    ax_hr.set_title("Pair-store effectiveness over stream")
-    ax_hr.grid(True, alpha=0.3)
-    ax_hr.legend(loc="lower right", fontsize=8, framealpha=0.9)
-
-    # ---- Panel 3: mean metric bar chart ----
-    names, vals, errs, colors = [], [], [], []
-    for m in METHODS:
-        st = states[m]
-        if not st.metric:
-            continue
-        arr = np.asarray(st.metric, dtype=float)
-        names.append(METHOD_LABELS[m].replace("CompCache + pairs ", "").replace("CompCache ", ""))
-        vals.append(arr.mean())
-        errs.append(arr.std(ddof=1) / max(1.0, np.sqrt(arr.size)) * 1.96)
-        colors.append(METHOD_COLORS[m])
-    x = np.arange(len(names))
-    bars = ax_f1.bar(x, vals, yerr=errs, color=colors, edgecolor="black", capsize=4)
-    for bar, v in zip(bars, vals):
-        ax_f1.text(
-            bar.get_x() + bar.get_width() / 2, v + 0.005,
-            f"{v:.3f}", ha="center", va="bottom", fontsize=9,
-        )
-    ax_f1.set_xticks(x)
-    ax_f1.set_xticklabels(names, rotation=12, ha="right", fontsize=9)
-    ax_f1.set_ylabel(f"Mean {metric_name}  (± 95% CI)")
-    ax_f1.set_title(f"Answer quality — {metric_name}")
-    ax_f1.grid(True, alpha=0.3, axis="y")
-
-    # ---- Panel 4: bytes used over time ----
-    for m in (METHOD_LFU_FULL, METHOD_LFU_DELTA):
-        st = states[m]
-        if not st.memory_log:
-            continue
-        idx = np.array([e[0] for e in st.memory_log])
-        mb = np.array([e[1] for e in st.memory_log], dtype=float) / (1024.0 ** 2)
-        entries = np.array([e[2] for e in st.memory_log], dtype=int)
-        ax_mb.plot(
-            idx, mb,
-            color=METHOD_COLORS[m], lw=2.0,
-            label=f"{METHOD_LABELS[m]}  (peak {mb.max():.1f} MB, final n={int(entries[-1])})",
-        )
-    if budget_mb_target is not None and budget_mb_target > 0:
-        ax_mb.axhline(
-            budget_mb_target,
-            color="black", ls="--", lw=1.5, alpha=0.6,
-            label=f"Target bytes budget ({budget_mb_target:.1f} MB)",
-        )
-    ax_mb.set_xlabel("Query index")
-    ax_mb.set_ylabel("Pair store size (MB)")
-    ax_mb.set_title("Pair store memory footprint (budget parity)")
-    ax_mb.grid(True, alpha=0.3)
-    ax_mb.legend(loc="lower right", fontsize=8, framealpha=0.9)
-
-    fig.suptitle(
-        f"Popularity-budget realistic eval — {dataset_label}",
-        fontsize=13, y=1.01,
-    )
-    fig.savefig(output_png, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return output_png
-
-
-def _plot_ttft_hist(
-    output_png: Path,
-    states: dict[str, MethodState],
-    *,
-    dataset_label: str,
-) -> Optional[Path]:
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
-    except ImportError:
-        return None
-
-    all_ms = []
-    for m in METHODS:
-        st = states[m]
-        if st.ttft:
-            all_ms.append(np.asarray(st.ttft) * 1e3)
-    if not all_ms:
-        return None
-    edges = np.histogram_bin_edges(np.concatenate(all_ms), bins="auto")
-    fig, ax = plt.subplots(figsize=(9.5, 5.5), layout="constrained")
-    for m in METHODS:
-        st = states[m]
-        if not st.ttft:
-            continue
-        ms = np.asarray(st.ttft) * 1e3
-        ax.hist(
-            ms, bins=edges, alpha=0.45, density=True,
-            color=METHOD_COLORS[m],
-            label=f"{METHOD_LABELS[m]}  (mean {ms.mean():.1f} ms)",
-        )
-    ax.set_xlabel("Prefill TTFT (ms)")
-    ax.set_ylabel("Density")
-    ax.set_title(f"TTFT distribution — {dataset_label}")
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="upper right", fontsize=9, framealpha=0.9)
-    fig.savefig(output_png, dpi=150)
-    plt.close(fig)
-    return output_png
-
-
-# --------------------------------------------------------------------------- #
-# Main runner                                                                 #
-# --------------------------------------------------------------------------- #
-
 
 def run_popularity_budget_eval(
     dataset_path: str,
@@ -320,12 +101,6 @@ def run_popularity_budget_eval(
     shuffle_dataset: bool = True,
     standard_qa: bool = False,
 ):
-    """Run the four methods back-to-back per query.
-
-    ``cap_delta`` is auto-set to ``round(cap_full / delta_top_k_ratio)``
-    when ``None`` so the two pair methods converge to the same asymptotic
-    bytes budget.  Pass an explicit value to override.
-    """
     import numpy as np
     import torch
     from itertools import chain
@@ -407,10 +182,10 @@ def run_popularity_budget_eval(
             cache_fuse_metadata["collect"] = prev_collect
             cache_fuse_metadata["check"] = prev_check
 
-    # ---- per-method state ----
+    
     states: dict[str, MethodState] = {m: MethodState(name=m) for m in METHODS}
 
-    # Single-chunk CompCache (no pair path).
+    
     single_fifo = FIFOChunkKVCache(fifo_max_chunks, store_on_cpu=True)
     single_logger = CoRetrievalLogger(promotion_threshold=promotion_threshold)
     null_pair_store = FullJointPairStore(1, store_on_cpu=True)
@@ -425,9 +200,9 @@ def run_popularity_budget_eval(
         promote_sync=False,
     )
 
-    # LFU pair methods.  The priority function consults THIS method's
-    # CoRetrievalLogger, not a shared one, so evictions reflect the
-    # frequencies that THIS store has actually observed.
+    
+    
+    
     def _mk_lfu(method: str, store_builder):
         fifo = FIFOChunkKVCache(fifo_max_chunks, store_on_cpu=True)
         logger = CoRetrievalLogger(promotion_threshold=promotion_threshold)
@@ -532,7 +307,7 @@ def run_popularity_budget_eval(
                 full_input_ids.extend(c[s_start_1_len - 1:])
             full_input_prompt = tokenizer.decode(full_input_ids)
 
-            # ---- Method 1: Full Prefill ----
+            
             with gpu_lock:
                 cache_fuse_metadata["collect"] = False
                 cache_fuse_metadata["check"] = False
@@ -547,7 +322,7 @@ def run_popularity_budget_eval(
             st.memory_log.append((sample_idx, 0, 0))
             st.metric.append(max(metric_fn(text, a, tokenizer) for a in answers))
 
-            # ---- Methods 2-4: compcache variants ----
+            
             for method, recomp_override in (
                 (METHOD_SINGLE, None),
                 (METHOD_LFU_FULL, pair_recomp_ratio),
@@ -606,9 +381,8 @@ def run_popularity_budget_eval(
                 st.worker.stop(drain=False)
                 st.worker.join(timeout=5.0)
 
-    # ---- artifacts --------------------------------------------------------
+    
     n = len(states[METHOD_FULL].ttft)
-    dataset_label = Path(dataset_path).stem
 
     summary = {}
     for m in METHODS:
@@ -627,19 +401,8 @@ def run_popularity_budget_eval(
             "logger_summary": st.logger.summary() if st.logger is not None else None,
         }
 
-    # Budget target line: mean bytes/entry of the Full-LFU run × its
-    # steady-state entry count.  This gives a human-readable "budget"
-    # reference on the memory panel.
-    full_state = states[METHOD_LFU_FULL]
-    if full_state.memory_log:
-        budget_mb = max(e[1] for e in full_state.memory_log) / (1024.0 ** 2)
-    else:
-        budget_mb = None
-
     base = Path(dataset_path).resolve()
     scores_path = base.with_name(f"{base.stem}_budget_scores.json")
-    main_png = base.with_name(f"{base.stem}_budget_main.png")
-    hist_png = base.with_name(f"{base.stem}_budget_ttft_hist.png")
 
     payload = {
         "dataset": str(base),
@@ -670,29 +433,12 @@ def run_popularity_budget_eval(
         json.dump(payload, f, indent=2, default=str)
     print(f"[budget] scores saved to {scores_path}")
 
-    roll_raw = os.environ.get("REALISTIC_TTFT_ROLL_WINDOW", "25")
-    try:
-        roll_window = max(1, int(roll_raw))
-    except ValueError:
-        roll_window = 25
-
-    _plot_main_grid(
-        main_png, states,
-        metric_name=metric_name,
-        roll_window=roll_window,
-        dataset_label=dataset_label,
-        budget_mb_target=budget_mb,
-    )
-    _plot_ttft_hist(hist_png, states, dataset_label=dataset_label)
-    print(f"[budget] main 2x2 plot:  {main_png}")
-    print(f"[budget] TTFT hist plot: {hist_png}")
-
     return {
         "n_queries": n,
         "per_method_summary": summary,
         "artifacts": {
             "scores_json": str(scores_path),
-            "main_png": str(main_png),
-            "ttft_hist_png": str(hist_png),
+            "main_png": None,
+            "ttft_hist_png": None,
         },
     }

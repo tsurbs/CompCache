@@ -1,12 +1,3 @@
-"""CompCache on SAMSum using the sparse-delta pair store.
-
-Mirrors ``blend_samsum_comp.py`` (Full-Joint pair store) one-to-one so
-ROUGE-L and TTFT are directly comparable.  Artifacts land under
-``*_comp_delta_*`` so they coexist with the baseline's ``*_comp_*``.
-
-Env overrides: ``STANDARD_COMP_DELTA_TOP_K_RATIO``,
-``STANDARD_COMP_ARTIFACT_SUFFIX`` (see ``utils.run_blend_eval_comp``).
-"""
 
 from utils import build_fewshot_prompt, compute_rl, run_blend_eval_comp
 

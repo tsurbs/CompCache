@@ -1,13 +1,3 @@
-"""Counts pair co-retrievals and emits promotion candidates at a threshold.
-
-The existing ``CoRetrievalTracker`` in standard_qa/runners/utils.py covers the
-post-hoc Zipf analysis; this module focuses on the online signal that drives
-composition-cache promotion: "has pair (a, b) been co-retrieved >= T times?"
-
-Each call to :meth:`record` returns the set of pairs whose count *just*
-crossed the threshold on this query, so callers can enqueue them for
-asynchronous precomputation.
-"""
 from __future__ import annotations
 
 import collections
@@ -18,29 +8,16 @@ from typing import Iterable, List, Set, Tuple
 
 from pair_kv_store import canonical_pair_key
 
-
 PairKey = Tuple[str, str]
-
 
 class CoRetrievalLogger:
     def __init__(self, promotion_threshold: int = 10) -> None:
-        # ``threshold=0`` means "promote on the very first co-retrieval" —
-        # after the ``+= 1`` in :meth:`record` the count is 1 which is
-        # ``>= 0`` so the pair flags immediately.  Equivalent to
-        # ``threshold=1`` (functionally; we accept both so callers can
-        # express "no threshold" literally).  Negative thresholds are
-        # rejected because they'd flag every pair on every query before
-        # the counter even increments.
-        if promotion_threshold < 0:
-            raise ValueError("promotion_threshold must be >= 0")
-        self.promotion_threshold = promotion_threshold
+        self.promotion_threshold = max(0, int(promotion_threshold))
         self.pair_counts: collections.Counter[PairKey] = collections.Counter()
         self.queries_seen = 0
-        # Pairs already flagged for promotion (so we enqueue each exactly once).
         self._flagged: Set[PairKey] = set()
 
     def record(self, doc_ids: Iterable[str]) -> List[PairKey]:
-        """Record one retrieval set. Return pairs that just crossed the threshold."""
         unique = sorted(set(doc_ids))
         self.queries_seen += 1
         newly_ready: List[PairKey] = []

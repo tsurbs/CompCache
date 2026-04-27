@@ -1,26 +1,3 @@
-"""Recomputation-ratio sweep: evaluate CompCache(single) and CompCache(+pairs) at
-a range of ``recomp_ratio`` values on the same query stream, holding everything
-else constant.
-
-For each query we:
-
-1. Run Full Prefill **once** (independent of ``recomp_ratio``).
-2. Build the single-chunk cached KV stack **once** (the "collect" phase).
-3. Build the pair-aware cached KV stack **once**.
-4. Loop over the supplied ``recomp_ratios`` and, for each value ``r``, run the
-   cached prefill twice — once with the single KV stack at ``recomp_ratio=r``
-   and once with the pair KV stack at ``recomp_ratio=r/2`` (pair repair budget
-   is always half the single one, per user convention).
-
-This keeps expensive chunk-level forwards + KV copies out of the inner sweep
-loop — we only pay the (fast) cached-prefill pass repeatedly, which is what
-actually depends on ``recomp_ratio``. Compared to rerunning the full 3-way
-evaluation eight times (8× model load, 8× collect) this runs ~8× faster.
-
-Outputs one JSON file ``{stem}_recomp_sweep_scores.json`` (set env var
-``RECOMP_SWEEP_OUTPUT_TAG`` to override the suffix) with arrays of per-query
-metric/TTFT values for every method and every ratio.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -37,14 +14,12 @@ _SQ_RUNNERS = str(_REPO_ROOT / "standard_qa" / "runners")
 if _SQ_RUNNERS not in sys.path:
     sys.path.insert(0, _SQ_RUNNERS)
 
-from utils import CoRetrievalTracker, get_doc_ids, load_dataset  # noqa: E402
-
-from co_retrieval_logger import CoRetrievalLogger  # noqa: E402
-from composition_cache import CompositionCache  # noqa: E402
-from kv_fifo_cache import FIFOChunkKVCache  # noqa: E402
-from pair_kv_store import FullJointPairStore  # noqa: E402
-from per_query_pair_assembler import assemble_pairs_per_query  # noqa: E402
-
+from utils import CoRetrievalTracker, get_doc_ids, load_dataset
+from co_retrieval_logger import CoRetrievalLogger
+from composition_cache import CompositionCache
+from kv_fifo_cache import FIFOChunkKVCache
+from pair_kv_store import FullJointPairStore
+from per_query_pair_assembler import assemble_pairs_per_query
 
 def _chunk_cache_key(chunk_index: int, token_ids: List[int]) -> str:
     if chunk_index == 0:
@@ -54,11 +29,9 @@ def _chunk_cache_key(chunk_index: int, token_ids: List[int]) -> str:
         h.update(t.to_bytes(4, "little", signed=False))
     return f"ctx:{h.hexdigest()}"
 
-
 def _sweep_suffix() -> str:
     tag = os.environ.get("RECOMP_SWEEP_OUTPUT_TAG", "").strip()
     return f"_recomp_sweep_{tag}" if tag else "_recomp_sweep"
-
 
 def run_recomp_sweep_eval(
     dataset_path: str,
@@ -85,13 +58,6 @@ def run_recomp_sweep_eval(
     fifo_max_chunks: int = 512,
     shuffle_dataset: bool = False,
 ):
-    """Sweep eval: Full once, single KVs once, pair KVs once, then cached-prefill
-    at each ``recomp_ratio`` for both single and pair KVs.
-
-    No cross-query caching anywhere (mirrors ``standard_qa`` 3-way mode): every
-    query re-builds its own single FIFO content via ``CompositionCache.assemble``
-    and its own per-query pair KVs via ``assemble_pairs_per_query``.
-    """
     import numpy as np
     import torch  # noqa: F401
     from itertools import chain
@@ -210,19 +176,19 @@ def run_recomp_sweep_eval(
             text = post_process(text)
         return ttft, text
 
-    # ---- Accumulators ------------------------------------------------------
-    # full: one score/ttft per query
+    
+    
     ttft_full: list[float] = []
     metric_full: list[float] = []
     collect_full: list[float] = []
 
-    # single/pair: per (ratio, query) score/ttft
+    
     n_r = len(recomp_ratios)
     ttft_single: list[list[float]] = [[] for _ in range(n_r)]
     ttft_pair:   list[list[float]] = [[] for _ in range(n_r)]
     metric_single: list[list[float]] = [[] for _ in range(n_r)]
     metric_pair:   list[list[float]] = [[] for _ in range(n_r)]
-    # collect times are independent of ratio (shared across the inner loop)
+    
     collect_single: list[float] = []
     collect_pair: list[float] = []
 
@@ -256,7 +222,7 @@ def run_recomp_sweep_eval(
                 full_input_ids.extend(c[s_start_1_len - 1:])
             full_input_prompt = tokenizer.decode(full_input_ids)
 
-            # ---- Full Prefill (once) ----
+            
             with gpu_lock:
                 cache_fuse_metadata["collect"] = False
                 cache_fuse_metadata["check"] = False
@@ -272,10 +238,10 @@ def run_recomp_sweep_eval(
                 flush=True,
             )
 
-            # ---- Build single KVs (once, no cross-query cache) ----
-            # Use a fresh per-query FIFO so no pair state leaks in. We still use
-            # CompositionCache(disable_pairs=True) so the tokenization / prompt
-            # assembly exactly matches the 3-way single path.
+            
+            
+            
+            
             per_query_fifo = FIFOChunkKVCache(fifo_max_chunks, store_on_cpu=cache_store_on_cpu)
             composition_single = CompositionCache(
                 individual_cache=per_query_fifo,
@@ -306,7 +272,7 @@ def run_recomp_sweep_eval(
             collect_single.append(coll_s)
             input_prompt_s = tokenizer.decode(input_ids_s)
 
-            # ---- Build pair KVs (once, no cross-query cache) ----
+            
             with gpu_lock:
                 cache_fuse_metadata["collect"] = True
                 cache_fuse_metadata["check"] = False
@@ -330,7 +296,7 @@ def run_recomp_sweep_eval(
             collect_pair.append(coll_p)
             input_prompt_p = tokenizer.decode(input_ids_p)
 
-            # ---- Sweep cached-prefill over recomp ratios ----
+            
             for ri, (r_single, r_pair) in enumerate(zip(recomp_ratios, pair_ratios)):
                 with gpu_lock:
                     for k, v in extra_metadata.items():
@@ -355,13 +321,13 @@ def run_recomp_sweep_eval(
     finally:
         pass
 
-    # ---- Save ---------------------------------------------------------------
+    
     suffix = _sweep_suffix()
     n_q = len(ttft_full)
     base = Path(dataset_path).resolve()
     out_path = base.with_name(f"{base.stem}{suffix}_scores.json")
 
-    # Per-ratio means
+    
     per_ratio = []
     import statistics as _s
     for ri, r in enumerate(recomp_ratios):
@@ -400,7 +366,7 @@ def run_recomp_sweep_eval(
         json.dump(payload, f, indent=2)
     print(f"\nSweep scores saved to {out_path}", flush=True)
 
-    # ---- Console summary ----------------------------------------------------
+    
     print("\n========= Recomp sweep summary =========")
     print(f"n_queries = {n_q}")
     print(f"Full  TTFT={payload['mean_ttft_full']:.4f}s  {metric_name}={payload[f'mean_{metric_name}_full']:.3f}")

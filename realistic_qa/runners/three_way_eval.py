@@ -1,33 +1,3 @@
-"""Three-way evaluation: Full Prefill vs CompCache (single-chunk only) vs CompCache + pair store.
-
-For each query, this runner produces three independent measurements that share
-nothing across methods (each method has its own FIFO chunk-KV cache so cache
-warmup is fair and not contaminated by the other methods' collect work):
-
-1. **Full Prefill** — vanilla prefill, no caching, no fusion.
-2. **CompCache (single-chunk)** — chunk-FIFO + CacheBlend selective recompute,
-   pair store / promotion worker disabled (the CacheBlend paper baseline as a
-   streaming workload).
-3. **CompCache + pairs** — chunk-FIFO + pair-store + CacheBlend selective
-   recompute (the full proposal).
-
-Per-query measurements written to ``{stem}_3way_scores.json``:
-
-- ``ttft_<method>``: first-token time of the (cached or full) prefill call only.
-  This matches the existing ``run_blend_eval_comp`` semantics so numbers are
-  directly comparable to ``*_comp_scores.json``.
-- ``collect_seconds_<method>``: critical-path time spent assembling KVs *before*
-  the prefill call (zero for full prefill; chunk-collect forward passes for
-  Method 2; chunk-collect minus pair-store hits for Method 3).
-- ``total_seconds_<method>``: ``ttft + collect`` — end-to-end time per query.
-
-Plot artifacts:
-
-- ``{stem}_3way_ttft_warmup.{json,png}`` — three TTFT-vs-query-index series.
-- ``{stem}_3way_ttft_hist.{json,png}``  — three-distribution histogram.
-- ``{stem}_3way_coretrieval.json``       — co-retrieval stats + per-method cache
-  stats (FIFO, pair store, promotion worker).
-"""
 from __future__ import annotations
 
 import hashlib
@@ -44,25 +14,17 @@ _SQ_RUNNERS = str(_REPO_ROOT / "standard_qa" / "runners")
 if _SQ_RUNNERS not in sys.path:
     sys.path.insert(0, _SQ_RUNNERS)
 
-from utils import CoRetrievalTracker, get_doc_ids, load_dataset  # noqa: E402
-from ttft_reporting import save_ttft_histogram, save_ttft_warmup_plot  # noqa: E402
-
-from co_retrieval_logger import CoRetrievalLogger  # noqa: E402
-from composition_cache import CompositionCache  # noqa: E402
-from kv_fifo_cache import FIFOChunkKVCache  # noqa: E402
-from pair_kv_store import FullJointPairStore  # noqa: E402
-from per_query_pair_assembler import assemble_pairs_per_query  # noqa: E402
-
+from utils import CoRetrievalTracker, get_doc_ids, load_dataset
+from ttft_reporting import save_ttft_histogram, save_ttft_warmup_plot
+from co_retrieval_logger import CoRetrievalLogger
+from composition_cache import CompositionCache
+from kv_fifo_cache import FIFOChunkKVCache
+from pair_kv_store import FullJointPairStore
+from per_query_pair_assembler import assemble_pairs_per_query
 
 def _three_way_suffix() -> str:
-    """Return the shared ``_3way[_<tag>]`` filename suffix.
-
-    Set env var ``THREE_WAY_OUTPUT_TAG`` (e.g. ``r018``) to append a tag and keep
-    prior-run artifacts (``*_3way_scores.json`` etc.) from being overwritten.
-    """
     tag = os.environ.get("THREE_WAY_OUTPUT_TAG", "").strip()
     return f"_3way_{tag}" if tag else "_3way"
-
 
 def _chunk_cache_key(chunk_index: int, token_ids: List[int]) -> str:
     if chunk_index == 0:
@@ -71,7 +33,6 @@ def _chunk_cache_key(chunk_index: int, token_ids: List[int]) -> str:
     for t in token_ids:
         h.update(t.to_bytes(4, "little", signed=False))
     return f"ctx:{h.hexdigest()}"
-
 
 def _save_3way_warmup(
     dataset_path: str,
@@ -84,11 +45,9 @@ def _save_3way_warmup(
     metadata: dict,
     roll_window: int,
 ) -> tuple[str, str | None]:
-    """Three-series TTFT-vs-query-index plot, saved as ``*_3way_ttft_warmup.{json,png}``."""
     base = Path(dataset_path).resolve()
     suffix = _three_way_suffix()
     json_path = base.with_name(f"{base.stem}{suffix}_ttft_warmup.json")
-    png_path = base.with_name(f"{base.stem}{suffix}_ttft_warmup.png")
     n = len(ttft_full)
     payload = {
         "query_index": list(range(n)),
@@ -106,47 +65,8 @@ def _save_3way_warmup(
     with open(json_path, "w") as f:
         json.dump(payload, f, indent=2)
 
-    png_written: str | None = None
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
-
-        x = np.arange(n, dtype=float)
-        fig, ax = plt.subplots(figsize=(11, 5.5), layout="constrained")
-        series = (
-            ("Full Prefill",                    ttft_full,   "#2ca02c"),
-            ("CompCache (single-chunk)",        ttft_single, "#ff7f0e"),
-            ("CompCache + pairs",               ttft_pair,   "#1f77b4"),
-        )
-        for label, ys, color in series:
-            ax.plot(x, np.asarray(ys, dtype=float) * 1e3, label=label, color=color, lw=0.7, alpha=0.5)
-        if roll_window > 1 and n >= roll_window:
-            w = roll_window
-            k = np.ones(w, dtype=float) / w
-            xs = np.arange(w - 1, n, dtype=float)
-            for label, ys, color in series:
-                smoothed = np.convolve(np.asarray(ys, dtype=float), k, mode="valid") * 1e3
-                short = label.split(" (", 1)[0]
-                ax.plot(xs, smoothed, label=f"{short} ({w}-query mean)", color=color, lw=2.0)
-        ax.set_xlabel("Query index (shuffled stream order)")
-        ax.set_ylabel("Prefill TTFT (ms)")
-        ax.set_title("TTFT — Full vs CompCache(single) vs CompCache(+pairs)")
-        ax.legend(loc="upper right", fontsize=8)
-        ax.grid(True, alpha=0.3)
-        fig.savefig(png_path, dpi=150)
-        plt.close(fig)
-        png_written = str(png_path)
-    except ImportError:
-        pass
-
-    if png_written:
-        print(f"3way TTFT warmup plot: {png_written}")
     print(f"3way TTFT warmup data: {json_path}")
-    return str(json_path), png_written
-
+    return str(json_path), None
 
 def _save_3way_hist(
     dataset_path: str,
@@ -156,11 +76,9 @@ def _save_3way_hist(
     *,
     metadata: dict,
 ) -> tuple[str, str | None]:
-    """Three-series TTFT histogram, saved as ``*_3way_ttft_hist.{json,png}``."""
     base = Path(dataset_path).resolve()
     suffix = _three_way_suffix()
     json_path = base.with_name(f"{base.stem}{suffix}_ttft_hist.json")
-    png_path = base.with_name(f"{base.stem}{suffix}_ttft_hist.png")
     n = len(ttft_full)
     if n == 0:
         return "", None
@@ -173,38 +91,8 @@ def _save_3way_hist(
     with open(json_path, "w") as f:
         json.dump(payload, f, indent=2)
 
-    png_written: str | None = None
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
-
-        f_ms = np.asarray(ttft_full,   dtype=float) * 1e3
-        s_ms = np.asarray(ttft_single, dtype=float) * 1e3
-        p_ms = np.asarray(ttft_pair,   dtype=float) * 1e3
-        edges = np.histogram_bin_edges(np.concatenate([f_ms, s_ms, p_ms]), bins="auto")
-        fig, ax = plt.subplots(figsize=(8, 5), layout="constrained")
-        ax.hist(f_ms, bins=edges, alpha=0.5, label="Full Prefill",            color="#2ca02c", density=True)
-        ax.hist(s_ms, bins=edges, alpha=0.5, label="CompCache (single-chunk)", color="#ff7f0e", density=True)
-        ax.hist(p_ms, bins=edges, alpha=0.5, label="CompCache + pairs",        color="#1f77b4", density=True)
-        ax.set_xlabel("TTFT (ms)")
-        ax.set_ylabel("Density")
-        ax.set_title("TTFT distribution — three-way comparison")
-        ax.legend(loc="upper right", fontsize=8)
-        ax.grid(True, alpha=0.3)
-        fig.savefig(png_path, dpi=150)
-        plt.close(fig)
-        png_written = str(png_path)
-    except ImportError:
-        pass
-
-    if png_written:
-        print(f"3way TTFT histogram: {png_written}")
     print(f"3way TTFT histogram data: {json_path}")
-    return str(json_path), png_written
-
+    return str(json_path), None
 
 def run_blend_eval_three_way(
     dataset_path: str,
@@ -235,26 +123,6 @@ def run_blend_eval_three_way(
     shuffle_dataset: bool = True,
     standard_qa: bool = False,
 ):
-    """Run all three methods (Full / Single-chunk / +pairs) per query.
-
-    State independence: Method 2 owns ``single_fifo`` (its own FIFOChunkKVCache).
-    Method 3's behavior depends on ``standard_qa``:
-
-    - ``standard_qa=False`` (realistic): owns ``pair_fifo`` + a FIFO
-      :class:`FullJointPairStore`. The CoRetrievalLogger / promotion threshold
-      are bypassed entirely — every adjacent pair the matcher proposes is
-      treated as cached, with synchronous joint-prefill computation on miss
-      (insertion-order eviction at ``pair_store_capacity``).
-    - ``standard_qa=True``: no cross-query caching at all. For every query the
-      retrieved doc list is grouped into adjacent pairs ``[(d0,d1),(d2,d3),...]``
-      and each pair's joint KV is computed fresh via a pair forward, simulating
-      a 100% pair-store hit rate without persistent state.
-
-    Both methods see the same query stream in the same order. Output suffix is
-    ``_3way`` (e.g. ``{stem}_3way_scores.json``). Set ``standard_qa=True`` from
-    ``standard_qa/runners/utils`` so output JSON includes
-    ``"eval": "standard_3way"``.
-    """
     import numpy as np
     import torch
     from itertools import chain
@@ -290,15 +158,15 @@ def run_blend_eval_three_way(
     s_start: list = []
     s_start_1_len = len(s_start) + 1
 
-    # Per-method state (independent FIFOs so warmup is honest).
-    # 3-way carries 2 FIFOs + (possibly) a pair store simultaneously, so we
-    # always offload to CPU to keep GPU memory available for vLLM's KV blocks
-    # (otherwise realistic-length runs OOM after a few hundred queries).
+    
+    
+    
+    
     cache_store_on_cpu = True
     single_fifo = FIFOChunkKVCache(fifo_max_chunks, store_on_cpu=cache_store_on_cpu)
-    # Only realistic_qa uses a persistent pair FIFO and pair store. For
-    # standard_qa the +pairs path computes joint pair KVs fresh every query
-    # with no cross-query cache (simulating a 100% hit rate operationally).
+    
+    
+    
     if standard_qa:
         pair_fifo = None
         pair_store = None
@@ -308,8 +176,8 @@ def run_blend_eval_three_way(
             pair_store_capacity, store_on_cpu=cache_store_on_cpu, fifo=True
         )
 
-    # Method 2 has no pair-aware components — ``disable_pairs=True`` short-circuits
-    # the logger / pair store, so the placeholder below is never read.
+    
+    
     single_logger = CoRetrievalLogger(promotion_threshold=2)
     null_pair_store = FullJointPairStore(1, store_on_cpu=cache_store_on_cpu)
     tracker = CoRetrievalTracker()
@@ -341,13 +209,11 @@ def run_blend_eval_three_way(
         return out
 
     def _run_forward(token_ids, slice_start, slice_end):
-        """Per-chunk collect forward pass (cache_fuse_metadata['collect']=True)."""
         prompts = [tokenizer.decode(token_ids)]
         llm.generate(prompts, sampling_params_collect)
         return _extract_layers(slice_start, slice_end)
 
     def _run_pair_forward(concat_tokens):
-        """Promotion-worker callback: jointly prefill (a, b) and snapshot KVs."""
         prev_collect = cache_fuse_metadata.get("collect", False)
         prev_check = cache_fuse_metadata.get("check", False)
         cache_fuse_metadata["collect"] = True
@@ -367,9 +233,9 @@ def run_blend_eval_three_way(
         promotion_worker=None,
         promote_sync=False,
     )
-    # Realistic-mode pair composer: treat-all-pairs-as-cached with a FIFO pair
-    # store. The CoRetrievalLogger placeholder is never read (bypassed by
-    # treat_all_pairs_as_cached=True) but the constructor requires one.
+    
+    
+    
     composition_pair: CompositionCache | None = None
     if not standard_qa:
         composition_pair = CompositionCache(
@@ -453,17 +319,17 @@ def run_blend_eval_three_way(
             doc_chunk_ids = doc_chunk_ids + [s_start + q_ids + s_end]
             last_len = len(q_ids + s_end) if suffix_is_query_len else len([q_ids + s_end])
 
-            # Identical input_prompt is fed to all three methods (Methods 2 and 3
-            # may reorder retrieval positions for pair adjacency; we handle that
-            # below by decoding the assemble()-returned input_ids).
+            
+            
+            
 
-            # Flat full-prefill prompt: original retrieval order.
+            
             full_input_ids: list[int] = list(doc_chunk_ids[0])
             for c in doc_chunk_ids[1:]:
                 full_input_ids.extend(c[s_start_1_len - 1:])
             full_input_prompt = tokenizer.decode(full_input_ids)
 
-            # ---- Method 1: Full Prefill ----------------------------------
+            
             with gpu_lock:
                 cache_fuse_metadata["collect"] = False
                 cache_fuse_metadata["check"] = False
@@ -476,7 +342,7 @@ def run_blend_eval_three_way(
             metric_full.append(score)
             print(f"[3way idx={sample_idx}] full TTFT={t_ttft_full:.4f}s score={score:.3f} -> {text_full!r}")
 
-            # ---- Method 2: CompCache single-chunk -------------------------
+            
             with gpu_lock:
                 cache_fuse_metadata["collect"] = True
                 cache_fuse_metadata["check"] = False
@@ -509,7 +375,7 @@ def run_blend_eval_three_way(
                 f"collect={collect_s:.4f}s score={score:.3f} -> {text_s!r}"
             )
 
-            # ---- Method 3: CompCache + pairs ------------------------------
+            
             with gpu_lock:
                 cache_fuse_metadata["collect"] = True
                 cache_fuse_metadata["check"] = False
@@ -517,8 +383,8 @@ def run_blend_eval_three_way(
                     cache_fuse_metadata[k] = v
                 t0 = time.perf_counter()
                 if standard_qa:
-                    # No cross-query caching: compute every adjacent pair's
-                    # joint KV fresh on this query (100% "hit rate" simulated).
+                    
+                    
                     input_ids_p, kvs_p, _, qstats_p = assemble_pairs_per_query(
                         doc_chunk_ids=doc_chunk_ids,
                         retrieval_doc_ids=doc_ids,
@@ -566,7 +432,7 @@ def run_blend_eval_three_way(
     finally:
         pass
 
-    # ---- Summaries ---------------------------------------------------------
+    
     n = len(ttft_full)
     total_full = [t + c for t, c in zip(ttft_full, collect_full)]
     total_single = [t + c for t, c in zip(ttft_single, collect_single)]

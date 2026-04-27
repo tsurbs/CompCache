@@ -1,16 +1,4 @@
-#!/usr/bin/env python3
-"""Build extended CacheBlend-style QA JSON (Musique + 2WikiMQA, optional SAMSum).
 
-Musique / 2WikiMQA (6000 rows total):
-  750 + 750 = 1500 originals; 3 GPT paraphrases each → 6000 total queries.
-  Contexts are split into ~512-token chunks (LangChain + HF tokenizer).
-  Global Faiss (L2) over all chunks; each query gets top-6 chunks, order shuffled
-  with seed 34.
-
-SAMSum: keeps existing ctxs as separate chunks (no 512 re-split).
-
-Loads LITELLM_KEY from .env when present; uses OpenAI-compatible gateway.
-"""
 from __future__ import annotations
 
 import argparse
@@ -35,25 +23,21 @@ from transformers import AutoTokenizer
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_GATEWAY = "https://ai-gateway.andrew.cmu.edu/v1"
 
-
 def _repo_json(path: str | Path) -> Path:
     p = Path(path)
     if p.is_absolute():
         return p
     return _REPO_ROOT / p
 
-
 def load_json(path: Path) -> list:
     with open(path, encoding="utf-8") as f:
         return json.load(f)
-
 
 def save_json(path: Path, rows: list) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(rows, f, indent=2, ensure_ascii=False)
         f.write("\n")
-
 
 def sample_rows(rows: list, n: int, seed: int) -> list:
     rng = random.Random(seed)
@@ -63,18 +47,14 @@ def sample_rows(rows: list, n: int, seed: int) -> list:
     rng.shuffle(idx)
     return [rows[i] for i in sorted(idx[:n])]
 
-
 def flatten_ctx_text(example: dict) -> str:
     return "\n\n".join(c.get("text", "") for c in example.get("ctxs", []))
-
 
 def ctxs_from_text_chunks(chunks: list[str]) -> list[dict]:
     return [{"title": "", "text": t} for t in chunks]
 
-
 def ctxs_samsum(example: dict) -> list[dict]:
     return example.get("ctxs", [])
-
 
 def build_splitter(tokenizer_id: str) -> RecursiveCharacterTextSplitter:
     tok = AutoTokenizer.from_pretrained(tokenizer_id, trust_remote_code=True)
@@ -89,7 +69,6 @@ def build_splitter(tokenizer_id: str) -> RecursiveCharacterTextSplitter:
         separators=["\n\n", "\n", ". ", " ", ""],
     )
 
-
 def split_example_context(example: dict, splitter: RecursiveCharacterTextSplitter) -> list[str]:
     text = flatten_ctx_text(example)
     if not text.strip():
@@ -97,13 +76,10 @@ def split_example_context(example: dict, splitter: RecursiveCharacterTextSplitte
     parts = splitter.split_text(text)
     return [p for p in parts if p.strip()]
 
-
 def resolve_st_device(st_device: str) -> str:
-    """Map ``auto`` → cuda if available, else cpu."""
     if st_device in ("auto", ""):
         return "cuda" if torch.cuda.is_available() else "cpu"
     return st_device
-
 
 def load_st_model(model_id: str, st_device: str) -> SentenceTransformer:
     dev = resolve_st_device(st_device)
@@ -113,7 +89,6 @@ def load_st_model(model_id: str, st_device: str) -> SentenceTransformer:
     except TypeError:
         m = SentenceTransformer(model_id)
         return m if dev == "cpu" else m.to(dev)
-
 
 def embed_all(
     model: SentenceTransformer,
@@ -129,15 +104,14 @@ def embed_all(
     )
     return np.asarray(out, dtype=np.float32)
 
-
 def paraphrase_three(
     client: OpenAI,
     model: str,
     question: str,
     retries: int = 4,
 ) -> list[str]:
-    # Note: We don't actually have this prompt from the paper
-    # Also note, we don't know which GPT-4 variant they used.  We use GPT-4.1-mini
+    
+    
     prompt = (
         "Generate exactly 3 diverse paraphrases of the question below. "
         "Keep the same answerable intent. Output ONLY a JSON array of 3 strings, "
@@ -149,7 +123,7 @@ def paraphrase_three(
             resp = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.7, # Not specified in the paper
+                temperature=0.7, 
             )
             raw = (resp.choices[0].message.content or "").strip()
             raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
@@ -167,7 +141,6 @@ def paraphrase_three(
                 raise
             time.sleep(1.0 * (attempt + 1))
     raise RuntimeError(f"Failed to paraphrase: {question[:80]}")
-
 
 def build_musique_wikimqa(
     musique_path: Path,
@@ -194,7 +167,7 @@ def build_musique_wikimqa(
 
     splitter = build_splitter(splitter_model)
 
-    # (source, orig_idx_in_source, question, answers, chunk_text)
+    
     chunk_rows: list[tuple[str, int, list[str], str, int]] = []
     originals: list[dict] = []
 
@@ -268,7 +241,6 @@ def build_musique_wikimqa(
 
     save_json(out_path, output)
     print(f"[build] wrote {len(output)} rows -> {out_path}")
-
 
 def build_samsum(
     samsum_path: Path,
@@ -359,7 +331,6 @@ def build_samsum(
 
     save_json(out_path, output)
     print(f"[samsum] wrote {len(output)} rows -> {out_path}")
-
 
 def main() -> None:
     load_dotenv(_REPO_ROOT / ".env")
@@ -456,7 +427,6 @@ def main() -> None:
             st_device=args.st_device,
             embed_batch_size=ebs,
         )
-
 
 if __name__ == "__main__":
     main()

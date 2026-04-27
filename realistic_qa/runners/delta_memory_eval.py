@@ -1,32 +1,3 @@
-"""Test 1: measure the memory savings of :class:`SparseDeltaPairStore`
-against :class:`FullJointPairStore` on a single dataset, on GPU, with real
-prefill.
-
-The runner loads vLLM once, then replays the same shuffled query stream
-through a series of composition-cache configs (each with its own FIFO
-chunk cache, logger, promotion worker, and pair store) and records
-
-- bytes currently held by the pair store after each query (``bytes_used``),
-- pair-store entry count,
-- per-query TTFT and quality metric (F1 by default),
-- pair hit / miss counts.
-
-Artifacts (written next to ``dataset_path``):
-
-- ``{stem}_delta_memory_scores.json`` — per-config per-query series and
-  summary stats (peak MB, mean F1, mean TTFT, reconstruct failures).
-- ``{stem}_delta_memory_timeseries.png`` — pair-store MB vs query index,
-  one curve per config.  The "memory savings" plot.
-- ``{stem}_delta_memory_tradeoff.png`` — peak MB (x) vs mean F1 (y)
-  scatter, one marker per config; the composition-cache Pareto view.
-- ``{stem}_delta_memory_ttft.png`` — TTFT distribution per config
-  (kernel-density overlay) so we can confirm the memory-savings path
-  does not regress prefill latency.
-
-By default the sweep is ``["full", "delta_r0.50", "delta_r0.10"]``.
-Override via env ``DELTA_MEMORY_CONFIGS`` (comma-separated; e.g.
-``"full,delta_r0.25,delta_r0.10,delta_r0.05"``).
-"""
 from __future__ import annotations
 
 import hashlib
@@ -45,33 +16,24 @@ _SQ_RUNNERS = str(_REPO_ROOT / "standard_qa" / "runners")
 if _SQ_RUNNERS not in sys.path:
     sys.path.insert(0, _SQ_RUNNERS)
 
-from utils import CoRetrievalTracker, get_doc_ids, load_dataset  # noqa: E402
-
-from co_retrieval_logger import CoRetrievalLogger  # noqa: E402
-from composition_cache import CompositionCache  # noqa: E402
-from kv_fifo_cache import FIFOChunkKVCache  # noqa: E402
-from pair_kv_store import (  # noqa: E402
+from utils import CoRetrievalTracker, get_doc_ids, load_dataset
+from co_retrieval_logger import CoRetrievalLogger
+from composition_cache import CompositionCache
+from kv_fifo_cache import FIFOChunkKVCache
+from pair_kv_store import (
     FullJointPairStore,
     PairKVStore,
     SparseDeltaPairStore,
 )
-from promotion_worker import PromotionWorker  # noqa: E402
-
-
-# --------------------------------------------------------------------------- #
-# Config parsing                                                              #
-# --------------------------------------------------------------------------- #
-
+from promotion_worker import PromotionWorker
 
 @dataclass
 class PairStoreConfig:
     name: str
-    kind: str  # "full" or "delta"
-    top_k_ratio: float = 1.0  # only used when kind == "delta"
-
+    kind: str  
+    top_k_ratio: float = 1.0  
 
 def _parse_config(token: str) -> PairStoreConfig:
-    """``"full"``  →  full joint;  ``"delta_r0.10"``  →  delta with ratio 0.10."""
     t = token.strip().lower()
     if t in ("full", "full_joint", "joint"):
         return PairStoreConfig(name="Full (joint)", kind="full")
@@ -89,16 +51,9 @@ def _parse_config(token: str) -> PairStoreConfig:
         f"(e.g. 'delta_r0.10')"
     )
 
-
 def _default_configs() -> List[PairStoreConfig]:
     raw = os.environ.get("DELTA_MEMORY_CONFIGS", "full,delta_r0.50,delta_r0.10")
     return [_parse_config(t) for t in raw.split(",") if t.strip()]
-
-
-# --------------------------------------------------------------------------- #
-# Per-config run state                                                        #
-# --------------------------------------------------------------------------- #
-
 
 @dataclass
 class RunState:
@@ -115,9 +70,8 @@ class RunState:
     pair_misses: List[int] = field(default_factory=list)
     individual_hits: List[int] = field(default_factory=list)
     individual_misses: List[int] = field(default_factory=list)
-    # (query_idx, bytes_used, entries).  Recorded after every query.
+    
     memory_log: List[Tuple[int, int, int]] = field(default_factory=list)
-
 
 def _chunk_cache_key(chunk_index: int, token_ids: List[int]) -> str:
     if chunk_index == 0:
@@ -126,184 +80,6 @@ def _chunk_cache_key(chunk_index: int, token_ids: List[int]) -> str:
     for t in token_ids:
         h.update(t.to_bytes(4, "little", signed=False))
     return f"ctx:{h.hexdigest()}"
-
-
-# --------------------------------------------------------------------------- #
-# Plotting                                                                    #
-# --------------------------------------------------------------------------- #
-
-
-_PALETTE = [
-    "#1f77b4",  # Full — blue
-    "#d62728",  # Δ-1.0  — red (sanity check: equal to full)
-    "#ff7f0e",  # Δ-0.5  — orange
-    "#2ca02c",  # Δ-0.25 — green
-    "#9467bd",  # Δ-0.10 — purple
-    "#17becf",  # Δ-0.05 — teal
-    "#8c564b",  # catch-all
-]
-
-
-def _color_for(i: int) -> str:
-    return _PALETTE[i % len(_PALETTE)]
-
-
-def _plot_memory_timeseries(
-    output_png: Path,
-    runs: List[RunState],
-    *,
-    n_queries: int,
-    dataset_label: str,
-) -> Optional[Path]:
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
-    except ImportError:
-        return None
-
-    fig, ax = plt.subplots(figsize=(11, 5.5), layout="constrained")
-
-    x = np.arange(n_queries, dtype=float)
-    for i, run in enumerate(runs):
-        if not run.memory_log:
-            continue
-        indices = np.array([e[0] for e in run.memory_log])
-        mb = np.array([e[1] for e in run.memory_log], dtype=float) / (1024.0 ** 2)
-        entries = np.array([e[2] for e in run.memory_log], dtype=float)
-        ax.plot(
-            indices,
-            mb,
-            label=f"{run.cfg.name}  (peak {mb.max():.1f} MB, final n={int(entries[-1])})",
-            color=_color_for(i),
-            lw=2.0,
-        )
-
-    ax.set_xlabel("Query index (shuffled stream order)")
-    ax.set_ylabel("Pair store size (MB)")
-    ax.set_title(f"Pair store memory footprint over query stream — {dataset_label}")
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
-    # Add a faint horizontal band at the "first" config's peak so the eye
-    # can measure reductions at a glance.
-    if runs and runs[0].memory_log:
-        ref_peak = max(e[1] for e in runs[0].memory_log) / (1024.0 ** 2)
-        ax.axhline(ref_peak, color=_color_for(0), ls=":", lw=1.0, alpha=0.7)
-        ax.text(
-            0.01, ref_peak, f"  {runs[0].cfg.name} peak",
-            transform=ax.get_yaxis_transform(),
-            fontsize=8, color=_color_for(0), va="bottom",
-        )
-
-    fig.savefig(output_png, dpi=150)
-    plt.close(fig)
-    return output_png
-
-
-def _plot_memory_tradeoff(
-    output_png: Path,
-    runs: List[RunState],
-    *,
-    metric_name: str,
-    dataset_label: str,
-) -> Optional[Path]:
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
-    except ImportError:
-        return None
-
-    if not any(r.metric for r in runs):
-        return None
-
-    fig, ax = plt.subplots(figsize=(8.5, 5.5), layout="constrained")
-    peak_mbs, means, labels, colors = [], [], [], []
-    for i, run in enumerate(runs):
-        if not run.metric or not run.memory_log:
-            continue
-        peak_mb = max(e[1] for e in run.memory_log) / (1024.0 ** 2)
-        mean_f1 = float(np.mean(run.metric))
-        peak_mbs.append(peak_mb)
-        means.append(mean_f1)
-        labels.append(run.cfg.name)
-        colors.append(_color_for(i))
-
-    ax.scatter(peak_mbs, means, s=120, c=colors, edgecolor="black", zorder=3)
-    for x, y, lab in zip(peak_mbs, means, labels):
-        ax.annotate(
-            lab, (x, y), textcoords="offset points", xytext=(8, 6),
-            fontsize=9,
-        )
-
-    ax.set_xscale("log")
-    ax.set_xlabel("Peak pair-store memory (MB, log scale)")
-    ax.set_ylabel(f"Mean {metric_name}")
-    ax.set_title(f"Memory / quality trade-off — {dataset_label}")
-    ax.grid(True, which="both", alpha=0.3)
-
-    fig.savefig(output_png, dpi=150)
-    plt.close(fig)
-    return output_png
-
-
-def _plot_ttft_distributions(
-    output_png: Path,
-    runs: List[RunState],
-    *,
-    dataset_label: str,
-) -> Optional[Path]:
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
-    except ImportError:
-        return None
-
-    if not any(r.ttft for r in runs):
-        return None
-
-    fig, ax = plt.subplots(figsize=(9, 5.5), layout="constrained")
-    all_ms = []
-    for r in runs:
-        if r.ttft:
-            all_ms.append(np.asarray(r.ttft) * 1e3)
-    if not all_ms:
-        return None
-    edges = np.histogram_bin_edges(np.concatenate(all_ms), bins="auto")
-    for i, run in enumerate(runs):
-        if not run.ttft:
-            continue
-        ms = np.asarray(run.ttft) * 1e3
-        ax.hist(
-            ms,
-            bins=edges,
-            alpha=0.45,
-            label=f"{run.cfg.name}  (mean {ms.mean():.1f} ms)",
-            color=_color_for(i),
-            density=True,
-        )
-    ax.set_xlabel("Prefill TTFT (ms)")
-    ax.set_ylabel("Density")
-    ax.set_title(f"TTFT distribution — {dataset_label}")
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="upper right", fontsize=9, framealpha=0.9)
-
-    fig.savefig(output_png, dpi=150)
-    plt.close(fig)
-    return output_png
-
-
-# --------------------------------------------------------------------------- #
-# Main runner                                                                 #
-# --------------------------------------------------------------------------- #
-
 
 def run_delta_memory_eval(
     dataset_path: str,
@@ -336,16 +112,6 @@ def run_delta_memory_eval(
     shuffle_dataset: bool = True,
     configs: Optional[List[PairStoreConfig]] = None,
 ):
-    """Sweep pair-store configs in a single vLLM process and emit the
-    memory-savings artifacts.
-
-    ``promote_sync=False`` (default) uses the existing async
-    :class:`PromotionWorker` path, matching ``comp_blend_eval`` in
-    production.  The pair-store bytes curve will have a small lag vs the
-    co-retrieval logger (a few queries while the async job catches up)
-    but the asymptote we care about — total memory held once promotions
-    steady-state — is unaffected.
-    """
     import numpy as np
     import torch
     from itertools import chain
@@ -366,13 +132,13 @@ def run_delta_memory_eval(
     llm_kwargs: dict = {
         "model": model_name,
         "gpu_memory_utilization": gpu_memory_utilization,
-        # Disable CUDA graph capture.  At threshold=0 the PromotionWorker
-        # processes O(n_docs^2) pair-forwards per query, and vLLM's
-        # captured graphs (1-3 GiB each) linger in the allocator's
-        # reserved pool across hundreds of back-to-back generate() calls
-        # — saturated an H100 80 GB at query ~25 before this flag.
-        # Eager mode trades <5% prefill throughput for predictable
-        # memory.
+        
+        
+        
+        
+        
+        
+        
         "enforce_eager": True,
     }
     if max_model_len is not None:
@@ -401,12 +167,12 @@ def run_delta_memory_eval(
     cache_fuse_metadata = model_ref.cache_fuse_metadata
     gpu_lock = threading.Lock()
 
-    # Reusable empty placeholder that preserves the ``old_kvs[i]`` layout
-    # (``llama.py`` forward unconditionally indexes it even when
-    # ``check=False``).  Assigning this between configs drops references
-    # to the previous config's GPU KV clones so ``empty_cache()`` can
-    # actually reclaim them — just setting ``model_ref.old_kvs = None``
-    # crashes the next forward pass with ``'NoneType' not subscriptable``.
+    
+    
+    
+    
+    
+    
     _empty_old_kvs = [[None, None]] * len(layers)
 
     sampling_params_collect = SamplingParams(temperature=0, max_tokens=1)
@@ -441,17 +207,17 @@ def run_delta_memory_eval(
             cache_fuse_metadata["check"] = prev_check
 
     def _make_store(cfg: PairStoreConfig) -> PairKVStore:
-        # Every config shares the SAME byte budget so the memory-savings
-        # benchmark is apples-to-apples: Full-Joint holds fewer but larger
-        # entries; Sparse-Δ holds more but smaller entries; their total
-        # bytes footprint converges on ``pair_store_bytes_budget``.  The
-        # entry cap (``pair_store_capacity``) is a hard ceiling kept high
-        # enough that the byte budget is what actually bites for Δ-configs.
+        
+        
+        
+        
+        
+        
         if cfg.kind == "full":
             return FullJointPairStore(
                 pair_store_capacity,
                 bytes_budget=pair_store_bytes_budget,
-                store_on_cpu=True,  # independent stores stacked across configs
+                store_on_cpu=True,  
             )
         return SparseDeltaPairStore(
             pair_store_capacity,
@@ -460,26 +226,26 @@ def run_delta_memory_eval(
             store_on_cpu=True,
         )
 
-    # One shared FIFO across configs: individual-chunk KVs are
-    # content-addressed and identical across runs, so per-config FIFOs
-    # would just triplicate ~64 MB × thousands-of-chunks on host RAM
-    # (CPU OOM at capacity).  Sharing keeps eviction behaviour identical
-    # — all three configs see the same query stream — while cutting the
-    # FIFO footprint 3×.
+    
+    
+    
+    
+    
+    
     shared_fifo = FIFOChunkKVCache(fifo_max_chunks, store_on_cpu=True)
 
     runs: List[RunState] = []
     for cfg in configs:
         store = _make_store(cfg)
         logger = CoRetrievalLogger(promotion_threshold=promotion_threshold)
-        # Cap the worker queue tight.  With threshold=0 every newly
-        # co-retrieved pair (~C(n_docs, 2) per query) flags for
-        # promotion; a 1024-deep queue lets backlog swell to hundreds
-        # of outstanding forwards and blew the H100 allocator.  64
-        # is enough for a burst of co-occurring pairs without letting
-        # the run accumulate unbounded work — overflow is counted as
-        # ``dropped`` in ``worker.stats`` and the pair will flag again
-        # if it keeps recurring.
+        
+        
+        
+        
+        
+        
+        
+        
         worker = PromotionWorker(
             store, _run_pair_forward, gpu_lock, max_queue_size=64
         )
@@ -508,18 +274,8 @@ def run_delta_memory_eval(
     base = Path(dataset_path).resolve()
     dataset_label = base.stem
     scores_path = base.with_name(f"{base.stem}_delta_memory_scores.json")
-    timeseries_png = base.with_name(f"{base.stem}_delta_memory_timeseries.png")
-    tradeoff_png = base.with_name(f"{base.stem}_delta_memory_tradeoff.png")
-    ttft_png = base.with_name(f"{base.stem}_delta_memory_ttft.png")
 
     def _write_artifacts(is_checkpoint: bool = False) -> None:
-        """Serialize current ``runs`` state to JSON + regenerate all plots.
-
-        Called periodically inside the sample loop (``is_checkpoint=True``)
-        so that a mid-run crash (GPU/CPU OOM, preemption, etc.) still
-        leaves a usable partial artifact set.  The final call at the end
-        of the run overwrites these files with the full results.
-        """
         n_local = len(runs[0].ttft) if runs else 0
         if n_local == 0:
             return
@@ -573,29 +329,12 @@ def run_delta_memory_eval(
             "coretrieval": tracker.summary(),
         }
 
-        # Write via temp file + rename so a crash mid-dump never leaves a
-        # truncated/invalid JSON behind.
+        
+        
         tmp_scores = scores_path.with_suffix(scores_path.suffix + ".tmp")
         with open(tmp_scores, "w") as f:
             json.dump(payload_local, f, indent=2, default=str)
         os.replace(tmp_scores, scores_path)
-
-        try:
-            _plot_memory_timeseries(
-                timeseries_png, runs, n_queries=n_local, dataset_label=dataset_label
-            )
-            _plot_memory_tradeoff(
-                tradeoff_png, runs, metric_name=metric_name, dataset_label=dataset_label
-            )
-            _plot_ttft_distributions(
-                ttft_png, runs, dataset_label=dataset_label
-            )
-        except Exception as plot_err:  # pragma: no cover - best effort
-            print(
-                f"[delta-mem] checkpoint plot failure "
-                f"(json still written): {plot_err!r}",
-                flush=True,
-            )
 
         tag = "checkpoint" if is_checkpoint else "final"
         print(
@@ -684,14 +423,14 @@ def run_delta_memory_eval(
                     len(run.pair_store._store),  # type: ignore[attr-defined]
                 ))
 
-                # Release references to the just-used chunk KVs and ask
-                # the CUDA allocator to reclaim them before the next
-                # config's assemble brings in its own set.  Without this,
-                # three consecutive ``FIFO.get → .cuda()`` clones per
-                # sample accumulate into GPU OOM once vLLM's block pool
-                # is saturated.  ``model_ref.old_kvs`` must stay
-                # structurally valid so the next forward pass can
-                # unconditionally index it.
+                
+                
+                
+                
+                
+                
+                
+                
                 model_ref.old_kvs = _empty_old_kvs
                 del chunk_past_key_values
                 del input_ids
@@ -705,9 +444,9 @@ def run_delta_memory_eval(
                     parts.append(f"{run.cfg.name}: {mb:.1f}MB, {run.pair_store.stats()['entries']}e")
                 print(f"[delta-mem idx={sample_idx}] " + " | ".join(parts), flush=True)
 
-            # Periodic checkpoint so we always have usable artifacts even
-            # if the container dies later (GPU OOM, preemption, etc.).
-            # First checkpoint after the first 50 samples, then every 100.
+            
+            
+            
             completed = sample_idx + 1
             if completed == 50 or (completed >= 100 and completed % 100 == 0):
                 _write_artifacts(is_checkpoint=True)
@@ -716,17 +455,17 @@ def run_delta_memory_eval(
             if run.worker.is_alive():
                 run.worker.stop(drain=False)
                 run.worker.join(timeout=5.0)
-        # Best-effort flush on the way out — covers both clean completion
-        # (overwrites checkpoint with final) and exception paths (captures
-        # whatever work has been done so far).
+        
+        
+        
         try:
             _write_artifacts(is_checkpoint=False)
-        except Exception as e:  # pragma: no cover - best effort
+        except Exception as e:  
             print(f"[delta-mem] final artifact flush failed: {e!r}", flush=True)
 
-    # Final artifacts were already flushed by the ``finally`` block above;
-    # re-read the summary snapshot we just wrote so the return value stays
-    # in sync with what landed on disk.
+    
+    
+    
     n = len(runs[0].ttft) if runs else 0
     try:
         with open(scores_path, "r") as f:
@@ -740,8 +479,8 @@ def run_delta_memory_eval(
         "per_config": per_config_summary,
         "artifacts": {
             "scores_json": str(scores_path),
-            "timeseries_png": str(timeseries_png),
-            "tradeoff_png": str(tradeoff_png),
-            "ttft_png": str(ttft_png),
+            "timeseries_png": None,
+            "tradeoff_png": None,
+            "ttft_png": None,
         },
     }

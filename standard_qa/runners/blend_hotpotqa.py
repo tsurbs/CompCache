@@ -1,7 +1,5 @@
 from utils import build_qa_prompt, compute_f1, run_blend_eval
 
-# Expect standard_qa/inputs/hotpotqa_s.json: list of
-# {"question", "ctxs": [{"title", "text"}, ...], "answers": ["gold", ...]}
 query_prompt = (
     "\n\nAnswer the question based on the given passages."
     " Answer the question within 5 words."

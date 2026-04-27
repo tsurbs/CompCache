@@ -1,12 +1,3 @@
-"""CompCache on the Zipf-expanded WikiMQA dataset using the sparse-delta pair store.
-
-Mirrors ``blend_wikimqa_zipf_comp.py`` (Full-Joint pair store) one-to-one
-so F1 and TTFT are directly comparable.  Artifacts land under
-``*_comp_delta_*`` so they coexist with the baseline's ``*_comp_*``.
-
-Env overrides: ``STANDARD_COMP_DELTA_TOP_K_RATIO``,
-``STANDARD_COMP_ARTIFACT_SUFFIX`` (see ``utils.run_blend_eval_comp``).
-"""
 
 import json
 
@@ -15,7 +6,6 @@ from utils import build_qa_prompt, compute_f1, load_dataset, run_blend_eval_comp
 SOURCE_PATH = "standard_qa/inputs/wikimqa_s.json"
 ZIPF_PATH = "standard_qa/inputs/wikimqa_zipf.json"
 C = 100
-
 
 def generate_zipf_dataset():
     source = load_dataset(SOURCE_PATH)
@@ -28,7 +18,6 @@ def generate_zipf_dataset():
     print(f"Generated {ZIPF_PATH}: {len(expanded)} examples "
           f"from {len(source)} originals (C={C})")
     return expanded
-
 
 generate_zipf_dataset()
 

@@ -1,8 +1,3 @@
-"""CacheBlend eval with FIFO reuse of independently collected chunk KVs.
-
-Expects a dataset JSON built by ``realistic_qa/scripts/build_extended_dataset.py``.
-Processing order is shuffled (default seed 34) to mimic streaming queries.
-"""
 from __future__ import annotations
 
 import json
@@ -14,8 +9,9 @@ _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO / "standard_qa" / "runners"))
 sys.path.insert(0, str(_REPO / "realistic_qa" / "runners"))
 
-from ttft_reporting import save_ttft_histogram, save_ttft_warmup_plot  # noqa: E402
-from utils import (  # noqa: E402
+# standard_qa/runners on sys.path: shared eval utils + vLLM-side helpers.
+from ttft_reporting import save_ttft_histogram, save_ttft_warmup_plot
+from utils import (
     CoRetrievalTracker,
     build_qa_prompt,
     compute_f1,
@@ -23,22 +19,20 @@ from utils import (  # noqa: E402
     load_dataset,
 )
 
-from kv_fifo_cache import FIFOChunkKVCache  # noqa: E402
-
-from comp_blend_eval import _chunk_cache_key, run_blend_eval_comp  # noqa: E402
-from delta_memory_eval import (  # noqa: E402
+from kv_fifo_cache import FIFOChunkKVCache
+from comp_blend_eval import _chunk_cache_key, run_blend_eval_comp
+from delta_memory_eval import (
     _parse_config as _parse_delta_config,
     run_delta_memory_eval,
 )
-from popularity_budget_eval import run_popularity_budget_eval  # noqa: E402
-from three_way_eval import run_blend_eval_three_way  # noqa: E402
+from popularity_budget_eval import run_popularity_budget_eval
+from three_way_eval import run_blend_eval_three_way
 
 query_prompt = (
     "\n\nAnswer the question directly based on the given passages."
     " Do NOT repeat the question."
     " The answer should be within 5 words. \nQuestion:"
 )
-
 
 def run_blend_eval_fifo(
     dataset_path: str,
@@ -370,9 +364,7 @@ def run_blend_eval_fifo(
         "coretrieval": coret_stats,
     }
 
-
 def _resolve_dataset_path(raw: str) -> str:
-    """Paths are relative to the CompCache repo root (works on Modal cwd=/CompCache or elsewhere)."""
     p = Path(raw)
     if not p.is_absolute():
         p = (_REPO / p).resolve()
@@ -381,7 +373,6 @@ def _resolve_dataset_path(raw: str) -> str:
             f"Dataset not found: {p}"
         )
     return str(p)
-
 
 def main() -> None:
     fifo_max = int(os.environ.get("REALISTIC_FIFO_MAX", "10000"))
@@ -401,14 +392,12 @@ def main() -> None:
     mml_raw = os.environ.get("REALISTIC_MAX_MODEL_LEN")
     max_model_len = int(mml_raw) if mml_raw else None
     if max_model_len is None and max_ctx_len is not None:
-        # Doc tokens are capped at max_ctx_len; prompt adds inst/query/template overhead.
+        
         max_model_len = max_ctx_len + 2048
 
     mode = os.environ.get("REALISTIC_MODE", "fifo").lower()
+    # REALISTIC_MODE -> fifo | comp | 3way | delta_memory | budget.
 
-    # ``recomp_ratio`` overrides vLLM's cache_fuse_metadata default (0.16).
-    # Set via env so every realistic mode honours the same knob; leave
-    # unset to fall back to vLLM's built-in default.
     recomp_raw = os.environ.get("REALISTIC_RECOMP_RATIO")
     recomp_ratio = float(recomp_raw) if recomp_raw else None
 
@@ -457,9 +446,6 @@ def main() -> None:
             promote_sync=prom_sync,
         )
     elif mode == "3way":
-        # Realistic 3-way: the pair store is a plain FIFO of joint-KV
-        # computations (no promotion threshold, sync-compute on miss). Only the
-        # capacity is tunable via env var.
         pair_cap = int(os.environ.get("REALISTIC_PAIR_STORE_CAP", "256"))
         print(f"[mode=3way] pair_store_cap={pair_cap} (FIFO, no promotion threshold)")
         run_blend_eval_three_way(
@@ -467,17 +453,6 @@ def main() -> None:
             pair_store_capacity=pair_cap,
         )
     elif mode == "delta_memory":
-        # Test 1 — memory-savings sweep on a single dataset (full GPU eval).
-        # Defaults tuned for "cache fills immediately":
-        #   - promotion_threshold=0 so every co-retrieved pair is admitted
-        #     on first sight (vs threshold=10 which kept the store empty
-        #     for ~1000 queries on the extended_cacheblend stream).
-        #   - pair_store_capacity=4096 so the entry ceiling is never the
-        #     binding constraint and the byte budget is what actually
-        #     shapes the cache across configs.
-        #   - pair_store_bytes_budget gives Full-Joint and Sparse-Δ the
-        #     same memory to work with; Δ mechanically fits more pairs
-        #     (by 1/top_k_ratio), which is the story this benchmark tells.
         pair_cap = int(os.environ.get("REALISTIC_PAIR_STORE_CAP", "4096"))
         prom_t = int(os.environ.get("REALISTIC_PROMOTION_THRESHOLD", "0"))
         bytes_env = os.environ.get("DELTA_MEMORY_BYTES_BUDGET", "").strip()
@@ -501,7 +476,7 @@ def main() -> None:
             configs=configs,
         )
     elif mode == "budget":
-        # Test 2 — popularity / equal-bytes-budget revamped realistic eval.
+        
         cap_full = int(os.environ.get("REALISTIC_CAP_FULL", "256"))
         delta_ratio = float(os.environ.get("REALISTIC_DELTA_TOP_K_RATIO", "0.1"))
         cap_delta_env = os.environ.get("REALISTIC_CAP_DELTA", "")
@@ -525,7 +500,6 @@ def main() -> None:
             f"Unknown REALISTIC_MODE={mode!r}; expected 'fifo', 'comp', '3way', "
             f"'delta_memory', or 'budget'"
         )
-
 
 if __name__ == "__main__":
     main()

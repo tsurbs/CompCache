@@ -23,17 +23,6 @@ Breaking this down, we'll need the following components to mimic the extended da
    2. Cache as much as possible per the CacheBlend protocol, evict with FIFO
 5. Create the modal hookup in `modal_runner.py`
 
-## Testing
-
-From the repo root:
-
-```bash
-python -m pytest realistic_qa/tests/ -q
-```
-
-- **Unit / contract tests** cover composition cache, pair store, promotion worker, TTFT reporting helpers, and (via source checks) the realistic **FIFO** and **CompCache** runners — no GPU required.
-- **End-to-end** eval (vLLM + GPU) is not run in CI; run locally or via Modal when you need full runs.
-
 ## CompCache (composition-aware) mode
 
 Same runner as FIFO, but with pair promotion and joint KV storage (`run_blend_eval_comp` in `realistic_qa/runners/blend_realistic.py`).
@@ -46,4 +35,4 @@ export REALISTIC_DATASET=realistic_qa/inputs/extended_tiny.json
 python realistic_qa/runners/blend_realistic.py
 ```
 
-Outputs next to the dataset include `{stem}_comp_scores.json`, `{stem}_comp_coretrieval.json`, `{stem}_comp_ttft_warmup.*`, and `{stem}_comp_ttft_hist.*`. Optional env: `REALISTIC_PAIR_STORE_CAP`, `REALISTIC_PROMOTION_THRESHOLD`, `REALISTIC_PROMOTE_SYNC=1`, `REALISTIC_TTFT_ROLL_WINDOW`.
+Outputs next to the dataset include `{stem}_comp_scores.json`, `{stem}_comp_coretrieval.json`, `{stem}_comp_ttft_warmup.json`, and `{stem}_comp_ttft_hist.json`. Optional env: `REALISTIC_PAIR_STORE_CAP`, `REALISTIC_PROMOTION_THRESHOLD`, `REALISTIC_PROMOTE_SYNC=1`, `REALISTIC_TTFT_ROLL_WINDOW`.

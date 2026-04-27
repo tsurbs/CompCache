@@ -11,6 +11,7 @@ from rouge_score import rouge_scorer
 
 from ttft_reporting import save_ttft_histogram, save_ttft_warmup_plot
 
+# JSON rows: question, ctxs[{title,text}], answers (Hotpot-style eval dumps).
 def load_dataset(dataset_path):
     print("Loading dataset:", dataset_path)
     with open(dataset_path) as f:
@@ -30,9 +31,7 @@ def parse_generation(s):
         s = "No"
     return s
 
-
 def _coerce_answer_text(a) -> str:
-    """Gold answers may be str, nested list (dataset quirks), or None."""
     if isinstance(a, str):
         return a
     if a is None:
@@ -44,7 +43,6 @@ def _coerce_answer_text(a) -> str:
             return a[0]
         return _coerce_answer_text(a[0])
     return str(a)
-
 
 def normalize_answer(s):
     s = _coerce_answer_text(s)
@@ -67,8 +65,6 @@ def build_qa_prompt(example, query_prompt):
 
     q = normalize_question(example["question"])
     doc_prompts = [f"{ctx['title']}\n\n{ctx['text']}\n\n" for ctx in example["ctxs"]]
-    #ex_prompt = f"{docs_text}\n\nBased on these texts, answer the question:\nQ: {q}\nA:"
-    #q_prompt = f"\n\nAnswer the question based on the given passages. Answer the question within 5 words. Do NOT repeat the question or output any other words. Question: {q}\nAnswer:"
     q_prompt = f"{query_prompt}{q}\nAnswer:"
     return doc_prompts, q_prompt
 
@@ -82,13 +78,9 @@ def compute_f1(a_pred, a_gold, tokenizer):
     a_pred = parse_generation(a_pred)
     gold_toks = tokenizer.encode(normalize_answer(a_gold))[1:]
     pred_toks = tokenizer.encode(normalize_answer(a_pred))[1:]
-    #gold_toks = tokenizer.encode_chat_completion(ChatCompletionRequest(messages=[UserMessage(content=normalize_answer(a_gold))])).tokens[4:-4]
-    #pred_toks = tokenizer.encode_chat_completion(ChatCompletionRequest(messages=[UserMessage(content=normalize_answer(a_pred))])).tokens[4:-4]
-    #pdb.set_trace()
     common = collections.Counter(gold_toks) & collections.Counter(pred_toks)
     num_same = sum(common.values())
     if len(gold_toks) == 0 or len(pred_toks) == 0:
-        # If either is no-answer, then F1 is 1 if they agree, 0 otherwise
         return int(gold_toks == pred_toks)
     if num_same == 0:
         return 0
@@ -102,12 +94,7 @@ def compute_rl(pred, gold):
     rougeL = scorer.score(gold, pred)['rougeL'].fmeasure
     return rougeL
 
-
 def get_doc_ids(example):
-    """Extract stable document identifiers from a dataset example.
-
-    Uses 'title' when non-empty, otherwise a truncated SHA-256 of the text.
-    """
     ids = []
     for i, ctx in enumerate(example.get("ctxs", [])):
         if ctx.get("title"):
@@ -117,18 +104,13 @@ def get_doc_ids(example):
             ids.append(hashlib.sha256(text.encode()).hexdigest()[:16])
     return ids
 
-
 class CoRetrievalTracker:
-    """Tracks pairwise document co-retrieval frequency across queries
-    and fits a Zipf power-law model to the resulting distribution."""
-
     def __init__(self):
         self.pair_counts = collections.Counter()
         self.doc_counts = collections.Counter()
         self.retrieval_sets = []
 
     def record(self, doc_ids):
-        """Record one retrieval set (the list of doc ids returned for a query)."""
         self.retrieval_sets.append(list(doc_ids))
         for doc_id in doc_ids:
             self.doc_counts[doc_id] += 1
@@ -136,10 +118,6 @@ class CoRetrievalTracker:
             self.pair_counts[pair] += 1
 
     def fit_zipf(self):
-        """Estimate Zipf exponent alpha via log-log OLS on (rank, frequency).
-
-        Returns (alpha, r_squared) or (None, None) if insufficient data.
-        """
         ranked = self.pair_counts.most_common()
         if len(ranked) < 2:
             return None, None
@@ -160,7 +138,6 @@ class CoRetrievalTracker:
         return alpha, r_sq
 
     def summary(self):
-        """Print and return co-retrieval frequency analysis."""
         ranked = self.pair_counts.most_common()
         alpha, r_sq = self.fit_zipf()
 
@@ -205,7 +182,6 @@ class CoRetrievalTracker:
             "doc_frequencies": dict(self.doc_counts.most_common()),
         }
 
-
 def run_blend_eval(
     dataset_path,
     prefix_prompt,
@@ -226,40 +202,6 @@ def run_blend_eval(
     gpu_memory_utilization=0.5,
     num_layers=32,
 ):
-    """Run CacheBlend evaluation with co-retrieval frequency tracking.
-
-    Args:
-        dataset_path: Path to the JSON dataset.
-        prefix_prompt: System/instruction prefix text.
-        prompt_builder: callable(example) -> (doc_prompts, q_prompt).
-        metric_fn: callable(prediction, answer, tokenizer) -> float.
-        metric_name: Display name for the metric (e.g. "F1", "rl").
-        inst_tokens: Optional instruction token ids prepended before the
-                     encoded prefix_prompt (e.g. [INST] tokens).
-        s_end: End-of-sequence token ids appended after the query (default []).
-        suffix_is_query_len: If True, suffix_len = len(q_ids + s_end).
-                             If False, suffix_len = 1.
-        max_ctx_len: Optional max context length; chunks are dropped from the
-                     middle when exceeded.  None disables.
-        max_tokens: Max new tokens to generate.
-        recomp_ratio: Selective recomputation ratio (None = don't set).
-        fast_attention: Fast attention flag (None = don't set).
-        extra_metadata: Dict of extra cache_fuse_metadata keys to set at the
-                        start of each example (e.g. {"attn_bias": None}).
-        post_process: Optional callable(str) -> str applied to generation text.
-        clear_hack_kv: Set hack_kv to None after reading each layer.
-        model_name: HuggingFace model identifier.
-        gpu_memory_utilization: vLLM GPU memory fraction.
-        num_layers: Number of transformer layers.
-
-    Returns:
-        Dict with TTFT lists, metric lists, and co-retrieval statistics.
-
-    Artifacts written next to ``dataset_path`` (same as realistic FIFO naming,
-    with ``CacheBlend (standard)`` labels): ``*_ttft_warmup.json`` / ``.png``,
-    ``*_ttft_hist.json`` / ``.png``, ``*_coretrieval.json``, ``*_scores.json``
-    (scores include ``ttft_blend`` / ``ttft_full``).
-    """
     import numpy as np
     import torch
     from itertools import chain
@@ -325,7 +267,6 @@ def run_blend_eval(
 
         last_len = len(q_ids + s_end) if suffix_is_query_len else len([q_ids + s_end])
 
-        # --- KV collection phase ---
         cache_fuse_metadata['collect'] = True
         cache_fuse_metadata['check'] = False
         chunk_past_key_values = []
@@ -358,7 +299,6 @@ def run_blend_eval(
 
             model_ref.old_kvs = chunk_past_key_values
 
-        # --- Build full input ---
         input_ids = []
         for i in range(len(doc_chunk_ids)):
             if i == 0:
@@ -368,7 +308,6 @@ def run_blend_eval(
             input_ids += temp_ids
         input_prompt = tokenizer.decode(input_ids)
 
-        # --- Cached generation ---
         sampling_params = SamplingParams(temperature=0, max_tokens=max_tokens)
         cache_fuse_metadata['check'] = True
         cache_fuse_metadata['collect'] = False
@@ -390,7 +329,6 @@ def run_blend_eval(
         score = max(metric_fn(res, answer, tokenizer) for answer in answers)
         metric_blend.append(score)
 
-        # --- Normal generation ---
         sampling_params = SamplingParams(temperature=0, max_tokens=max_tokens)
         cache_fuse_metadata['check'] = False
         cache_fuse_metadata['collect'] = False
@@ -406,7 +344,6 @@ def run_blend_eval(
         metric_full.append(score)
         print("------------")
 
-    # --- Summary ---
     print("\n=============== Result Summary =====================")
     print(f"TTFT with cache: {np.mean(ttft_blend)}")
     print(f"TTFT with full prefill: {np.mean(ttft_full)}")
@@ -420,11 +357,9 @@ def run_blend_eval(
         json.dump(coret_stats, f, indent=2, default=str)
     print(f"\nCo-retrieval data saved to {output_path}")
 
-    roll_raw = os.environ.get("REALISTIC_TTFT_ROLL_WINDOW", "25")
-    try:
-        roll_window = max(0, int(roll_raw))
-    except ValueError:
-        roll_window = 25
+    roll_window = int(float(os.environ.get("REALISTIC_TTFT_ROLL_WINDOW", "25")))
+    if roll_window < 0:
+        roll_window = 0
     std_meta = {"eval": "standard"}
     save_ttft_warmup_plot(
         dataset_path,
@@ -471,7 +406,6 @@ def run_blend_eval(
         "coretrieval": coret_stats,
     }
 
-
 def run_blend_eval_comp(
     dataset_path,
     prefix_prompt,
@@ -500,18 +434,6 @@ def run_blend_eval_comp(
     delta_top_k_ratio=None,
     artifact_suffix=None,
 ):
-    """CompCache (standard QA): same metrics and TTFT plots as realistic comp; order matches ``run_blend_eval`` (no shuffle).
-
-    For standard QA, chunk and pair KV copies are kept on **CPU** and moved to
-    GPU only on cache hits (see ``FIFOChunkKVCache(..., store_on_cpu=True)`` in
-    ``comp_blend_eval``), so vLLM is not competing for the same VRAM as hundreds
-    of cached chunks. If ``max_ctx_len`` is omitted, use ``STANDARD_COMP_MAX_CTX_LEN``
-    (default ``4096``); ``0`` disables trimming. ``STANDARD_COMP_FIFO_MAX_CHUNKS``
-    (default ``512``) caps simultaneous cached chunks; ``STANDARD_COMP_PAIR_STORE_CAP``
-    (default ``128``) caps promoted pairs. ``STANDARD_COMP_GPU_MEMORY_UTILIZATION``
-    (default ``0.38``). ``STANDARD_COMP_MAX_MODEL_LEN`` overrides scheduler max; if
-    unset and ``max_ctx_len`` is set, ``max_ctx_len + 2048``.
-    """
     import sys
     from pathlib import Path
 
@@ -572,12 +494,6 @@ def run_blend_eval_comp(
         else:
             effective_pair = 128
 
-    # --- Delta-store knobs ---------------------------------------------
-    # Kept as keyword params so the existing ``blend_*_comp.py`` scripts
-    # (which never pass these) preserve their historical behaviour (full
-    # joint pair store, default r=0.1 unused, default ``_comp_*``
-    # artifact suffix).  Env overrides let you rerun the whole suite
-    # under a new store kind without editing each driver.
     effective_kind = pair_store_kind
     raw_k = os.environ.get("STANDARD_COMP_PAIR_STORE_KIND")
     if raw_k is not None and raw_k.strip() != "":
@@ -600,9 +516,6 @@ def run_blend_eval_comp(
     if raw_s is not None and raw_s.strip() != "":
         effective_suffix = raw_s.strip()
     if effective_suffix is None:
-        # Default suffix depends on the store kind so Full vs Delta
-        # artifacts never clobber each other even if someone forgets to
-        # pass one explicitly.
         effective_suffix = (
             "comp" if effective_kind.lower() in ("full", "full_joint", "joint")
             else "comp_delta"
@@ -647,7 +560,6 @@ def run_blend_eval_comp(
         artifact_suffix=effective_suffix,
     )
 
-
 def run_blend_eval_three_way(
     dataset_path,
     prefix_prompt,
@@ -672,20 +584,6 @@ def run_blend_eval_three_way(
     fifo_max_chunks=None,
     pair_store_capacity=None,
 ):
-    """Three-way eval (Full / CompCache-single / CompCache+pairs) for standard QA.
-
-    Re-uses the same env-var knobs as ``run_blend_eval_comp``
-    (``STANDARD_COMP_*``). Each query runs all three methods back-to-back
-    against independent FIFO state per method.
-
-    The +pairs method uses the per-query, no-cache assembler
-    (:func:`per_query_pair_assembler.assemble_pairs_per_query`): the retrieved
-    doc list is grouped into adjacent pairs and each pair's joint KV is
-    computed fresh on that query (simulating a 100% pair-store hit rate
-    without cross-query caching). ``pair_store_capacity`` is therefore ignored
-    in standard_qa 3-way; it is accepted for API compatibility.
-    Output suffix is ``_3way``.
-    """
     import sys
     from pathlib import Path
 
@@ -752,8 +650,6 @@ def run_blend_eval_three_way(
         sys.path.insert(0, _rr)
     from three_way_eval import run_blend_eval_three_way as _run_3way_impl
 
-    # Env overrides take priority so we can rerun all 6 blend scripts at a new
-    # recomp setting without editing any of them (e.g. calibration sweeps).
     effective_recomp = recomp_ratio
     raw_r = os.environ.get("STANDARD_COMP_RECOMP_RATIO")
     if raw_r is not None and raw_r.strip() != "":
@@ -799,7 +695,6 @@ def run_blend_eval_three_way(
         standard_qa=True,
     )
 
-
 def run_blend_eval_recomp_sweep(
     dataset_path,
     prefix_prompt,
@@ -824,12 +719,6 @@ def run_blend_eval_recomp_sweep(
     num_layers=32,
     fifo_max_chunks=None,
 ):
-    """Recomputation-ratio sweep wrapper for standard QA.
-
-    Reuses :func:`recomp_sweep_eval.run_recomp_sweep_eval`. Runs Full Prefill
-    once and cached-prefill at every ``recomp_ratios`` value for both the
-    single-chunk and pair KV stacks (``pair_ratio_fn(r)`` default = ``r/2``).
-    """
     import sys
     from pathlib import Path
 

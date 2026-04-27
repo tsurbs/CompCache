@@ -1,8 +1,3 @@
-"""Recomp-ratio sweep on HotpotQA — runs Full once, then single- and
-pair-KV cached prefill at every ``recomp_ratio`` in the sweep.
-
-Pair ratio is locked at half the single ratio (``r_pair = r_single / 2``).
-"""
 from utils import build_qa_prompt, compute_f1, run_blend_eval_recomp_sweep
 
 query_prompt = (

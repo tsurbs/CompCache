@@ -1,4 +1,3 @@
-"""FIFO cache for per-chunk KV tensors (CacheBlend independent chunk collection)."""
 from __future__ import annotations
 
 from collections import deque
@@ -6,19 +5,10 @@ from typing import List, Tuple
 
 import torch
 
-
 LayerKV = Tuple[torch.Tensor, torch.Tensor]
 StackedLayers = List[LayerKV]
 
-
 class FIFOChunkKVCache:
-    """Maps chunk keys to cloned per-layer [K,V] lists; evicts first-inserted entries.
-
-    ``store_on_cpu=True`` keeps tensors in system RAM and moves them to
-    ``cuda_device`` on ``get`` so GPU memory stays available for vLLM (standard
-    CompCache on ~48GB cards).
-    """
-
     def __init__(
         self,
         max_entries: int,
@@ -26,9 +16,7 @@ class FIFOChunkKVCache:
         store_on_cpu: bool = False,
         cuda_device: int | str | torch.device | None = None,
     ) -> None:
-        if max_entries < 1:
-            raise ValueError("max_entries must be >= 1")
-        self.max_entries = max_entries
+        self.max_entries = max(1, int(max_entries))
         self.store_on_cpu = store_on_cpu
         if cuda_device is None:
             self._cuda_device = (

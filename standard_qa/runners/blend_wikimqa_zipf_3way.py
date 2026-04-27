@@ -1,4 +1,3 @@
-"""Three-way evaluation on the Zipf-expanded WikiMQA dataset (mirrors ``blend_wikimqa_zipf_comp.py``)."""
 
 import json
 
@@ -7,7 +6,6 @@ from utils import build_qa_prompt, compute_f1, load_dataset, run_blend_eval_thre
 SOURCE_PATH = "standard_qa/inputs/wikimqa_s.json"
 ZIPF_PATH = "standard_qa/inputs/wikimqa_zipf.json"
 C = 100
-
 
 def generate_zipf_dataset():
     source = load_dataset(SOURCE_PATH)
@@ -20,7 +18,6 @@ def generate_zipf_dataset():
     print(f"Generated {ZIPF_PATH}: {len(expanded)} examples "
           f"from {len(source)} originals (C={C})")
     return expanded
-
 
 generate_zipf_dataset()
 

@@ -1,18 +1,3 @@
-"""CompCache on MultiHop-RAG using the sparse-delta pair store.
-
-Mirrors ``blend_multihop_rag_comp.py`` (Full-Joint pair store) one-to-one so
-F1 and TTFT are directly comparable, differing only in the pair KV store:
-``SparseDeltaPairStore`` keeps just ``Δ = joint_KV − cat(ind_a, ind_b)``
-sparsified to the top-``top_k_ratio`` positions per layer.  Artifacts land
-under ``*_comp_delta_*`` so they coexist with the baseline's ``*_comp_*``
-run on the same dataset.
-
-Env overrides:
-
-- ``STANDARD_COMP_DELTA_TOP_K_RATIO`` — delta sparsity (default ``0.10``).
-- ``STANDARD_COMP_ARTIFACT_SUFFIX`` — artifact filename suffix
-  (default ``"comp_delta"``).
-"""
 
 from utils import build_qa_prompt, compute_f1, run_blend_eval_comp
 
