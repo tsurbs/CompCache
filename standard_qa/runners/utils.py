@@ -1,5 +1,6 @@
 import json
 import collections
+import os
 import string
 import re
 import hashlib
@@ -8,81 +9,9 @@ from itertools import combinations
 from pathlib import Path
 from rouge_score import rouge_scorer
 
+from ttft_reporting import save_ttft_histogram, save_ttft_warmup_plot
 
-def save_ttft_histogram(
-    dataset_path: str,
-    ttft_blend: list[float],
-    ttft_full: list[float],
-    *,
-    cached_label: str = "Cached (CacheBlend)",
-    full_label: str = "Full prefill",
-    extra_metadata: dict | None = None,
-) -> tuple[str, str | None]:
-    n = len(ttft_blend)
-    if n == 0 or len(ttft_full) != n:
-        return "", None
-
-    base = Path(dataset_path).resolve()
-    json_path = base.with_name(f"{base.stem}_ttft_hist.json")
-    png_path = base.with_name(f"{base.stem}_ttft_hist.png")
-
-    meta = dict(extra_metadata or {})
-    meta["dataset"] = str(base)
-    meta["n_queries"] = n
-    payload = {
-        "ttft_blend_seconds": [float(x) for x in ttft_blend],
-        "ttft_full_seconds": [float(x) for x in ttft_full],
-        "metadata": meta,
-    }
-    with open(json_path, "w") as f:
-        json.dump(payload, f, indent=2)
-
-    png_written: str | None = None
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
-
-        b_ms = np.asarray(ttft_blend, dtype=float) * 1e3
-        f_ms = np.asarray(ttft_full, dtype=float) * 1e3
-        edges = np.histogram_bin_edges(
-            np.concatenate([b_ms, f_ms]), bins="auto"
-        )
-        fig, ax = plt.subplots(figsize=(8, 5), layout="constrained")
-        ax.hist(
-            b_ms,
-            bins=edges,
-            alpha=0.55,
-            label=cached_label,
-            color="#1f77b4",
-            density=True,
-        )
-        ax.hist(
-            f_ms,
-            bins=edges,
-            alpha=0.55,
-            label=full_label,
-            color="#ff7f0e",
-            density=True,
-        )
-        ax.set_xlabel("TTFT (ms)")
-        ax.set_ylabel("Density")
-        ax.set_title("TTFT: cached vs full prefill")
-        ax.legend(loc="upper right", fontsize=8)
-        ax.grid(True, alpha=0.3)
-        fig.savefig(png_path, dpi=150)
-        plt.close(fig)
-        png_written = str(png_path)
-    except ImportError:
-        pass
-
-    if png_written:
-        print(f"TTFT histogram: {png_written}")
-    print(f"TTFT histogram data: {json_path}")
-    return str(json_path), png_written
-
+# JSON rows: question, ctxs[{title,text}], answers (Hotpot-style eval dumps).
 def load_dataset(dataset_path):
     print("Loading dataset:", dataset_path)
     with open(dataset_path) as f:
@@ -102,9 +31,7 @@ def parse_generation(s):
         s = "No"
     return s
 
-
 def _coerce_answer_text(a) -> str:
-    """Gold answers may be str, nested list (dataset quirks), or None."""
     if isinstance(a, str):
         return a
     if a is None:
@@ -116,7 +43,6 @@ def _coerce_answer_text(a) -> str:
             return a[0]
         return _coerce_answer_text(a[0])
     return str(a)
-
 
 def normalize_answer(s):
     s = _coerce_answer_text(s)
@@ -139,8 +65,6 @@ def build_qa_prompt(example, query_prompt):
 
     q = normalize_question(example["question"])
     doc_prompts = [f"{ctx['title']}\n\n{ctx['text']}\n\n" for ctx in example["ctxs"]]
-    #ex_prompt = f"{docs_text}\n\nBased on these texts, answer the question:\nQ: {q}\nA:"
-    #q_prompt = f"\n\nAnswer the question based on the given passages. Answer the question within 5 words. Do NOT repeat the question or output any other words. Question: {q}\nAnswer:"
     q_prompt = f"{query_prompt}{q}\nAnswer:"
     return doc_prompts, q_prompt
 
@@ -154,13 +78,9 @@ def compute_f1(a_pred, a_gold, tokenizer):
     a_pred = parse_generation(a_pred)
     gold_toks = tokenizer.encode(normalize_answer(a_gold))[1:]
     pred_toks = tokenizer.encode(normalize_answer(a_pred))[1:]
-    #gold_toks = tokenizer.encode_chat_completion(ChatCompletionRequest(messages=[UserMessage(content=normalize_answer(a_gold))])).tokens[4:-4]
-    #pred_toks = tokenizer.encode_chat_completion(ChatCompletionRequest(messages=[UserMessage(content=normalize_answer(a_pred))])).tokens[4:-4]
-    #pdb.set_trace()
     common = collections.Counter(gold_toks) & collections.Counter(pred_toks)
     num_same = sum(common.values())
     if len(gold_toks) == 0 or len(pred_toks) == 0:
-        # If either is no-answer, then F1 is 1 if they agree, 0 otherwise
         return int(gold_toks == pred_toks)
     if num_same == 0:
         return 0
@@ -174,12 +94,7 @@ def compute_rl(pred, gold):
     rougeL = scorer.score(gold, pred)['rougeL'].fmeasure
     return rougeL
 
-
 def get_doc_ids(example):
-    """Extract stable document identifiers from a dataset example.
-
-    Uses 'title' when non-empty, otherwise a truncated SHA-256 of the text.
-    """
     ids = []
     for i, ctx in enumerate(example.get("ctxs", [])):
         if ctx.get("title"):
@@ -189,18 +104,13 @@ def get_doc_ids(example):
             ids.append(hashlib.sha256(text.encode()).hexdigest()[:16])
     return ids
 
-
 class CoRetrievalTracker:
-    """Tracks pairwise document co-retrieval frequency across queries
-    and fits a Zipf power-law model to the resulting distribution."""
-
     def __init__(self):
         self.pair_counts = collections.Counter()
         self.doc_counts = collections.Counter()
         self.retrieval_sets = []
 
     def record(self, doc_ids):
-        """Record one retrieval set (the list of doc ids returned for a query)."""
         self.retrieval_sets.append(list(doc_ids))
         for doc_id in doc_ids:
             self.doc_counts[doc_id] += 1
@@ -208,10 +118,6 @@ class CoRetrievalTracker:
             self.pair_counts[pair] += 1
 
     def fit_zipf(self):
-        """Estimate Zipf exponent alpha via log-log OLS on (rank, frequency).
-
-        Returns (alpha, r_squared) or (None, None) if insufficient data.
-        """
         ranked = self.pair_counts.most_common()
         if len(ranked) < 2:
             return None, None
@@ -232,7 +138,6 @@ class CoRetrievalTracker:
         return alpha, r_sq
 
     def summary(self):
-        """Print and return co-retrieval frequency analysis."""
         ranked = self.pair_counts.most_common()
         alpha, r_sq = self.fit_zipf()
 
@@ -277,7 +182,6 @@ class CoRetrievalTracker:
             "doc_frequencies": dict(self.doc_counts.most_common()),
         }
 
-
 def run_blend_eval(
     dataset_path,
     prefix_prompt,
@@ -298,35 +202,6 @@ def run_blend_eval(
     gpu_memory_utilization=0.5,
     num_layers=32,
 ):
-    """Run CacheBlend evaluation with co-retrieval frequency tracking.
-
-    Args:
-        dataset_path: Path to the JSON dataset.
-        prefix_prompt: System/instruction prefix text.
-        prompt_builder: callable(example) -> (doc_prompts, q_prompt).
-        metric_fn: callable(prediction, answer, tokenizer) -> float.
-        metric_name: Display name for the metric (e.g. "F1", "rl").
-        inst_tokens: Optional instruction token ids prepended before the
-                     encoded prefix_prompt (e.g. [INST] tokens).
-        s_end: End-of-sequence token ids appended after the query (default []).
-        suffix_is_query_len: If True, suffix_len = len(q_ids + s_end).
-                             If False, suffix_len = 1.
-        max_ctx_len: Optional max context length; chunks are dropped from the
-                     middle when exceeded.  None disables.
-        max_tokens: Max new tokens to generate.
-        recomp_ratio: Selective recomputation ratio (None = don't set).
-        fast_attention: Fast attention flag (None = don't set).
-        extra_metadata: Dict of extra cache_fuse_metadata keys to set at the
-                        start of each example (e.g. {"attn_bias": None}).
-        post_process: Optional callable(str) -> str applied to generation text.
-        clear_hack_kv: Set hack_kv to None after reading each layer.
-        model_name: HuggingFace model identifier.
-        gpu_memory_utilization: vLLM GPU memory fraction.
-        num_layers: Number of transformer layers.
-
-    Returns:
-        Dict with TTFT lists, metric lists, and co-retrieval statistics.
-    """
     import numpy as np
     import torch
     from itertools import chain
@@ -392,7 +267,6 @@ def run_blend_eval(
 
         last_len = len(q_ids + s_end) if suffix_is_query_len else len([q_ids + s_end])
 
-        # --- KV collection phase ---
         cache_fuse_metadata['collect'] = True
         cache_fuse_metadata['check'] = False
         chunk_past_key_values = []
@@ -425,7 +299,6 @@ def run_blend_eval(
 
             model_ref.old_kvs = chunk_past_key_values
 
-        # --- Build full input ---
         input_ids = []
         for i in range(len(doc_chunk_ids)):
             if i == 0:
@@ -435,7 +308,6 @@ def run_blend_eval(
             input_ids += temp_ids
         input_prompt = tokenizer.decode(input_ids)
 
-        # --- Cached generation ---
         sampling_params = SamplingParams(temperature=0, max_tokens=max_tokens)
         cache_fuse_metadata['check'] = True
         cache_fuse_metadata['collect'] = False
@@ -457,7 +329,6 @@ def run_blend_eval(
         score = max(metric_fn(res, answer, tokenizer) for answer in answers)
         metric_blend.append(score)
 
-        # --- Normal generation ---
         sampling_params = SamplingParams(temperature=0, max_tokens=max_tokens)
         cache_fuse_metadata['check'] = False
         cache_fuse_metadata['collect'] = False
@@ -473,7 +344,6 @@ def run_blend_eval(
         metric_full.append(score)
         print("------------")
 
-    # --- Summary ---
     print("\n=============== Result Summary =====================")
     print(f"TTFT with cache: {np.mean(ttft_blend)}")
     print(f"TTFT with full prefill: {np.mean(ttft_full)}")
@@ -487,7 +357,28 @@ def run_blend_eval(
         json.dump(coret_stats, f, indent=2, default=str)
     print(f"\nCo-retrieval data saved to {output_path}")
 
-    save_ttft_histogram(dataset_path, ttft_blend, ttft_full)
+    roll_window = int(float(os.environ.get("REALISTIC_TTFT_ROLL_WINDOW", "25")))
+    if roll_window < 0:
+        roll_window = 0
+    std_meta = {"eval": "standard"}
+    save_ttft_warmup_plot(
+        dataset_path,
+        ttft_blend,
+        ttft_full,
+        stream_seed=0,
+        skip_first=0,
+        fifo_stats={},
+        roll_window=roll_window,
+        cached_label="CacheBlend (standard)",
+        name_suffix="",
+    )
+    save_ttft_histogram(
+        dataset_path,
+        ttft_blend,
+        ttft_full,
+        cached_label="CacheBlend (standard)",
+        extra_metadata=std_meta,
+    )
 
     scores_path = Path(dataset_path).resolve()
     scores_path = scores_path.with_name(f"{scores_path.stem}_scores.json")
@@ -497,8 +388,11 @@ def run_blend_eval(
         f"{metric_name}_full": [float(x) for x in metric_full],
         f"mean_{metric_name}_blend": float(np.mean(metric_blend)),
         f"mean_{metric_name}_full": float(np.mean(metric_full)),
+        "ttft_blend": [float(x) for x in ttft_blend],
+        "ttft_full": [float(x) for x in ttft_full],
         "n_queries": len(metric_blend),
         "dataset": str(Path(dataset_path).resolve()),
+        "eval": "standard",
     }
     with open(scores_path, "w") as f:
         json.dump(scores_payload, f, indent=2)
@@ -511,3 +405,396 @@ def run_blend_eval(
         f"{metric_name}_full": metric_full,
         "coretrieval": coret_stats,
     }
+
+def run_blend_eval_comp(
+    dataset_path,
+    prefix_prompt,
+    prompt_builder,
+    metric_fn,
+    metric_name,
+    inst_tokens=None,
+    s_end=None,
+    suffix_is_query_len=True,
+    max_ctx_len=None,
+    max_tokens=32,
+    recomp_ratio=None,
+    fast_attention=None,
+    extra_metadata=None,
+    post_process=None,
+    clear_hack_kv=False,
+    model_name="mistralai/Mistral-7B-Instruct-v0.2",
+    gpu_memory_utilization=None,
+    max_model_len=None,
+    num_layers=32,
+    fifo_max_chunks=None,
+    pair_store_capacity=None,
+    promotion_threshold=10,
+    promote_sync=False,
+    pair_store_kind=None,
+    delta_top_k_ratio=None,
+    artifact_suffix=None,
+):
+    import sys
+    from pathlib import Path
+
+    effective_max_ctx = max_ctx_len
+    if effective_max_ctx is None:
+        raw = os.environ.get("STANDARD_COMP_MAX_CTX_LEN")
+        if raw is None:
+            effective_max_ctx = 4096
+        elif raw.strip() == "0":
+            effective_max_ctx = None
+        else:
+            try:
+                effective_max_ctx = int(raw)
+            except ValueError:
+                effective_max_ctx = 4096
+
+    effective_gpu = gpu_memory_utilization
+    if effective_gpu is None:
+        raw_g = os.environ.get("STANDARD_COMP_GPU_MEMORY_UTILIZATION")
+        if raw_g is not None:
+            try:
+                effective_gpu = float(raw_g)
+            except ValueError:
+                effective_gpu = 0.38
+        else:
+            effective_gpu = 0.38
+
+    effective_mml = max_model_len
+    if effective_mml is None:
+        raw_m = os.environ.get("STANDARD_COMP_MAX_MODEL_LEN")
+        if raw_m is not None and raw_m.strip() != "0":
+            try:
+                effective_mml = int(raw_m)
+            except ValueError:
+                effective_mml = None
+        if effective_mml is None and effective_max_ctx is not None:
+            effective_mml = effective_max_ctx + 2048
+
+    effective_fifo = fifo_max_chunks
+    if effective_fifo is None:
+        raw_f = os.environ.get("STANDARD_COMP_FIFO_MAX_CHUNKS")
+        if raw_f is not None:
+            try:
+                effective_fifo = max(1, int(raw_f))
+            except ValueError:
+                effective_fifo = 512
+        else:
+            effective_fifo = 512
+
+    effective_pair = pair_store_capacity
+    if effective_pair is None:
+        raw_p = os.environ.get("STANDARD_COMP_PAIR_STORE_CAP")
+        if raw_p is not None:
+            try:
+                effective_pair = max(1, int(raw_p))
+            except ValueError:
+                effective_pair = 128
+        else:
+            effective_pair = 128
+
+    effective_kind = pair_store_kind
+    raw_k = os.environ.get("STANDARD_COMP_PAIR_STORE_KIND")
+    if raw_k is not None and raw_k.strip() != "":
+        effective_kind = raw_k.strip()
+    if effective_kind is None:
+        effective_kind = "full"
+
+    effective_topk = delta_top_k_ratio
+    raw_t = os.environ.get("STANDARD_COMP_DELTA_TOP_K_RATIO")
+    if raw_t is not None and raw_t.strip() != "":
+        try:
+            effective_topk = float(raw_t)
+        except ValueError:
+            pass
+    if effective_topk is None:
+        effective_topk = 0.1
+
+    effective_suffix = artifact_suffix
+    raw_s = os.environ.get("STANDARD_COMP_ARTIFACT_SUFFIX")
+    if raw_s is not None and raw_s.strip() != "":
+        effective_suffix = raw_s.strip()
+    if effective_suffix is None:
+        effective_suffix = (
+            "comp" if effective_kind.lower() in ("full", "full_joint", "joint")
+            else "comp_delta"
+        )
+
+    _repo = Path(__file__).resolve().parents[2]
+    _rr = str(_repo / "realistic_qa" / "runners")
+    if _rr not in sys.path:
+        sys.path.insert(0, _rr)
+    from comp_blend_eval import run_blend_eval_comp as _run_comp
+
+    return _run_comp(
+        dataset_path,
+        prefix_prompt,
+        prompt_builder,
+        metric_fn,
+        metric_name,
+        inst_tokens=inst_tokens,
+        s_end=s_end,
+        suffix_is_query_len=suffix_is_query_len,
+        max_ctx_len=effective_max_ctx,
+        max_tokens=max_tokens,
+        recomp_ratio=recomp_ratio,
+        fast_attention=fast_attention,
+        extra_metadata=extra_metadata,
+        post_process=post_process,
+        clear_hack_kv=clear_hack_kv,
+        model_name=model_name,
+        gpu_memory_utilization=effective_gpu,
+        max_model_len=effective_mml,
+        num_layers=num_layers,
+        stream_seed=0,
+        skip_first=0,
+        fifo_max_chunks=effective_fifo,
+        pair_store_capacity=effective_pair,
+        pair_store_kind=effective_kind,
+        delta_top_k_ratio=effective_topk,
+        promotion_threshold=promotion_threshold,
+        promote_sync=promote_sync,
+        shuffle_dataset=False,
+        standard_qa=True,
+        artifact_suffix=effective_suffix,
+    )
+
+def run_blend_eval_three_way(
+    dataset_path,
+    prefix_prompt,
+    prompt_builder,
+    metric_fn,
+    metric_name,
+    inst_tokens=None,
+    s_end=None,
+    suffix_is_query_len=True,
+    max_ctx_len=None,
+    max_tokens=32,
+    recomp_ratio=None,
+    pair_recomp_ratio=None,
+    fast_attention=None,
+    extra_metadata=None,
+    post_process=None,
+    clear_hack_kv=False,
+    model_name="mistralai/Mistral-7B-Instruct-v0.2",
+    gpu_memory_utilization=None,
+    max_model_len=None,
+    num_layers=32,
+    fifo_max_chunks=None,
+    pair_store_capacity=None,
+):
+    import sys
+    from pathlib import Path
+
+    effective_max_ctx = max_ctx_len
+    if effective_max_ctx is None:
+        raw = os.environ.get("STANDARD_COMP_MAX_CTX_LEN")
+        if raw is None:
+            effective_max_ctx = 4096
+        elif raw.strip() == "0":
+            effective_max_ctx = None
+        else:
+            try:
+                effective_max_ctx = int(raw)
+            except ValueError:
+                effective_max_ctx = 4096
+
+    effective_gpu = gpu_memory_utilization
+    if effective_gpu is None:
+        raw_g = os.environ.get("STANDARD_COMP_GPU_MEMORY_UTILIZATION")
+        if raw_g is not None:
+            try:
+                effective_gpu = float(raw_g)
+            except ValueError:
+                effective_gpu = 0.38
+        else:
+            effective_gpu = 0.38
+
+    effective_mml = max_model_len
+    if effective_mml is None:
+        raw_m = os.environ.get("STANDARD_COMP_MAX_MODEL_LEN")
+        if raw_m is not None and raw_m.strip() != "0":
+            try:
+                effective_mml = int(raw_m)
+            except ValueError:
+                effective_mml = None
+        if effective_mml is None and effective_max_ctx is not None:
+            effective_mml = effective_max_ctx + 2048
+
+    effective_fifo = fifo_max_chunks
+    if effective_fifo is None:
+        raw_f = os.environ.get("STANDARD_COMP_FIFO_MAX_CHUNKS")
+        if raw_f is not None:
+            try:
+                effective_fifo = max(1, int(raw_f))
+            except ValueError:
+                effective_fifo = 512
+        else:
+            effective_fifo = 512
+
+    effective_pair = pair_store_capacity
+    if effective_pair is None:
+        raw_p = os.environ.get("STANDARD_COMP_PAIR_STORE_CAP")
+        if raw_p is not None:
+            try:
+                effective_pair = max(1, int(raw_p))
+            except ValueError:
+                effective_pair = 128
+        else:
+            effective_pair = 128
+
+    _repo = Path(__file__).resolve().parents[2]
+    _rr = str(_repo / "realistic_qa" / "runners")
+    if _rr not in sys.path:
+        sys.path.insert(0, _rr)
+    from three_way_eval import run_blend_eval_three_way as _run_3way_impl
+
+    effective_recomp = recomp_ratio
+    raw_r = os.environ.get("STANDARD_COMP_RECOMP_RATIO")
+    if raw_r is not None and raw_r.strip() != "":
+        try:
+            effective_recomp = float(raw_r)
+        except ValueError:
+            pass
+
+    effective_pair_recomp = pair_recomp_ratio
+    raw_pr = os.environ.get("STANDARD_COMP_PAIR_RECOMP_RATIO")
+    if raw_pr is not None and raw_pr.strip() != "":
+        try:
+            effective_pair_recomp = float(raw_pr)
+        except ValueError:
+            pass
+
+    return _run_3way_impl(
+        dataset_path,
+        prefix_prompt,
+        prompt_builder,
+        metric_fn,
+        metric_name,
+        inst_tokens=inst_tokens,
+        s_end=s_end,
+        suffix_is_query_len=suffix_is_query_len,
+        max_ctx_len=effective_max_ctx,
+        max_tokens=max_tokens,
+        recomp_ratio=effective_recomp,
+        pair_recomp_ratio=effective_pair_recomp,
+        fast_attention=fast_attention,
+        extra_metadata=extra_metadata,
+        post_process=post_process,
+        clear_hack_kv=clear_hack_kv,
+        model_name=model_name,
+        gpu_memory_utilization=effective_gpu,
+        max_model_len=effective_mml,
+        num_layers=num_layers,
+        stream_seed=0,
+        skip_first=0,
+        fifo_max_chunks=effective_fifo,
+        pair_store_capacity=effective_pair,
+        shuffle_dataset=False,
+        standard_qa=True,
+    )
+
+def run_blend_eval_recomp_sweep(
+    dataset_path,
+    prefix_prompt,
+    prompt_builder,
+    metric_fn,
+    metric_name,
+    *,
+    recomp_ratios,
+    pair_ratio_fn=lambda r: r / 2.0,
+    inst_tokens=None,
+    s_end=None,
+    suffix_is_query_len=True,
+    max_ctx_len=None,
+    max_tokens=32,
+    fast_attention=None,
+    extra_metadata=None,
+    post_process=None,
+    clear_hack_kv=False,
+    model_name="mistralai/Mistral-7B-Instruct-v0.2",
+    gpu_memory_utilization=None,
+    max_model_len=None,
+    num_layers=32,
+    fifo_max_chunks=None,
+):
+    import sys
+    from pathlib import Path
+
+    effective_max_ctx = max_ctx_len
+    if effective_max_ctx is None:
+        raw = os.environ.get("STANDARD_COMP_MAX_CTX_LEN")
+        if raw is None:
+            effective_max_ctx = 4096
+        elif raw.strip() == "0":
+            effective_max_ctx = None
+        else:
+            try:
+                effective_max_ctx = int(raw)
+            except ValueError:
+                effective_max_ctx = 4096
+
+    effective_gpu = gpu_memory_utilization
+    if effective_gpu is None:
+        raw_g = os.environ.get("STANDARD_COMP_GPU_MEMORY_UTILIZATION")
+        if raw_g is not None:
+            try:
+                effective_gpu = float(raw_g)
+            except ValueError:
+                effective_gpu = 0.38
+        else:
+            effective_gpu = 0.38
+
+    effective_mml = max_model_len
+    if effective_mml is None:
+        raw_m = os.environ.get("STANDARD_COMP_MAX_MODEL_LEN")
+        if raw_m is not None and raw_m.strip() != "0":
+            try:
+                effective_mml = int(raw_m)
+            except ValueError:
+                effective_mml = None
+        if effective_mml is None and effective_max_ctx is not None:
+            effective_mml = effective_max_ctx + 2048
+
+    effective_fifo = fifo_max_chunks
+    if effective_fifo is None:
+        raw_f = os.environ.get("STANDARD_COMP_FIFO_MAX_CHUNKS")
+        if raw_f is not None:
+            try:
+                effective_fifo = max(1, int(raw_f))
+            except ValueError:
+                effective_fifo = 512
+        else:
+            effective_fifo = 512
+
+    _repo = Path(__file__).resolve().parents[2]
+    _rr = str(_repo / "realistic_qa" / "runners")
+    if _rr not in sys.path:
+        sys.path.insert(0, _rr)
+    from recomp_sweep_eval import run_recomp_sweep_eval as _run_sweep_impl
+
+    return _run_sweep_impl(
+        dataset_path,
+        prefix_prompt,
+        prompt_builder,
+        metric_fn,
+        metric_name,
+        recomp_ratios=recomp_ratios,
+        pair_ratio_fn=pair_ratio_fn,
+        inst_tokens=inst_tokens,
+        s_end=s_end,
+        suffix_is_query_len=suffix_is_query_len,
+        max_ctx_len=effective_max_ctx,
+        max_tokens=max_tokens,
+        fast_attention=fast_attention,
+        extra_metadata=extra_metadata,
+        post_process=post_process,
+        clear_hack_kv=clear_hack_kv,
+        model_name=model_name,
+        gpu_memory_utilization=effective_gpu,
+        max_model_len=effective_mml,
+        num_layers=num_layers,
+        fifo_max_chunks=effective_fifo,
+        shuffle_dataset=False,
+    )

@@ -1,11 +1,5 @@
-"""CacheBlend eval with FIFO reuse of independently collected chunk KVs.
-
-Expects a dataset JSON built by ``realistic_qa/scripts/build_extended_dataset.py``.
-Processing order is shuffled (default seed 34) to mimic streaming queries.
-"""
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
@@ -15,103 +9,30 @@ _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO / "standard_qa" / "runners"))
 sys.path.insert(0, str(_REPO / "realistic_qa" / "runners"))
 
-from utils import (  # noqa: E402
+# standard_qa/runners on sys.path: shared eval utils + vLLM-side helpers.
+from ttft_reporting import save_ttft_histogram, save_ttft_warmup_plot
+from utils import (
     CoRetrievalTracker,
     build_qa_prompt,
     compute_f1,
     get_doc_ids,
     load_dataset,
-    save_ttft_histogram,
 )
 
-from kv_fifo_cache import FIFOChunkKVCache  # noqa: E402
+from kv_fifo_cache import FIFOChunkKVCache
+from comp_blend_eval import _chunk_cache_key, run_blend_eval_comp
+from delta_memory_eval import (
+    _parse_config as _parse_delta_config,
+    run_delta_memory_eval,
+)
+from popularity_budget_eval import run_popularity_budget_eval
+from three_way_eval import run_blend_eval_three_way
 
 query_prompt = (
     "\n\nAnswer the question directly based on the given passages."
     " Do NOT repeat the question."
     " The answer should be within 5 words. \nQuestion:"
 )
-
-
-def _save_ttft_warmup_plot(
-    dataset_path: str,
-    ttft_blend: list[float],
-    ttft_full: list[float],
-    *,
-    stream_seed: int,
-    skip_first: int,
-    fifo_stats: dict,
-    roll_window: int,
-) -> tuple[str, str | None]:
-    """Write per-query TTFT series (JSON) and a line plot (PNG) next to the dataset file.
-    """
-    base = Path(dataset_path).resolve()
-    json_path = base.with_name(f"{base.stem}_ttft_warmup.json")
-    png_path = base.with_name(f"{base.stem}_ttft_warmup.png")
-
-    n = len(ttft_blend)
-    payload = {
-        "query_index": list(range(n)),
-        "ttft_blend_seconds": [float(x) for x in ttft_blend],
-        "ttft_full_seconds": [float(x) for x in ttft_full],
-        "metadata": {
-            "dataset": str(base),
-            "stream_seed": stream_seed,
-            "skip_first": skip_first,
-            "fifo_kv": fifo_stats,
-            "roll_window": roll_window,
-        },
-    }
-    with open(json_path, "w") as f:
-        json.dump(payload, f, indent=2)
-
-    png_written: str | None = None
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
-
-        x = np.arange(n, dtype=float)
-        fig, ax = plt.subplots(figsize=(10, 5), layout="constrained")
-        ax.plot(x, np.asarray(ttft_blend, dtype=float) * 1e3, label="CacheBlend (FIFO KV)", lw=0.8, alpha=0.85)
-        ax.plot(x, np.asarray(ttft_full, dtype=float) * 1e3, label="Full prefill", lw=0.8, alpha=0.85)
-
-        if roll_window > 1 and n >= roll_window:
-            w = roll_window
-            k = np.ones(w, dtype=float) / w
-            smooth_b = np.convolve(ttft_blend, k, mode="valid") * 1e3
-            smooth_f = np.convolve(ttft_full, k, mode="valid") * 1e3
-            xs = np.arange(w - 1, n, dtype=float)
-            ax.plot(xs, smooth_b, label=f"CacheBlend ({w}-query rolling mean)", lw=1.5)
-            ax.plot(xs, smooth_f, label=f"Full prefill ({w}-query rolling mean)", lw=1.5)
-
-        ax.set_xlabel("Query index (shuffled stream order)")
-        ax.set_ylabel("TTFT (ms)")
-        ax.set_title("Time to first token vs cache warmup")
-        ax.legend(loc="upper right", fontsize=8)
-        ax.grid(True, alpha=0.3)
-        fig.savefig(png_path, dpi=150)
-        plt.close(fig)
-        png_written = str(png_path)
-    except ImportError:
-        pass
-
-    if png_written:
-        print(f"TTFT warmup plot: {png_written}")
-    print(f"TTFT warmup data: {json_path}")
-    return str(json_path), png_written
-
-
-def _chunk_cache_key(chunk_index: int, token_ids: list[int]) -> str:
-    if chunk_index == 0:
-        return "__instr_prefix__"
-    h = hashlib.sha256()
-    for t in token_ids:
-        h.update(t.to_bytes(4, "little", signed=False))
-    return f"ctx:{h.hexdigest()}"
-
 
 def run_blend_eval_fifo(
     dataset_path: str,
@@ -391,7 +312,7 @@ def run_blend_eval_fifo(
         roll_window = max(0, int(roll_raw))
     except ValueError:
         roll_window = 25
-    _save_ttft_warmup_plot(
+    save_ttft_warmup_plot(
         dataset_path,
         ttft_blend,
         ttft_full,
@@ -443,9 +364,7 @@ def run_blend_eval_fifo(
         "coretrieval": coret_stats,
     }
 
-
 def _resolve_dataset_path(raw: str) -> str:
-    """Paths are relative to the CompCache repo root (works on Modal cwd=/CompCache or elsewhere)."""
     p = Path(raw)
     if not p.is_absolute():
         p = (_REPO / p).resolve()
@@ -454,7 +373,6 @@ def _resolve_dataset_path(raw: str) -> str:
             f"Dataset not found: {p}"
         )
     return str(p)
-
 
 def main() -> None:
     fifo_max = int(os.environ.get("REALISTIC_FIFO_MAX", "10000"))
@@ -474,10 +392,16 @@ def main() -> None:
     mml_raw = os.environ.get("REALISTIC_MAX_MODEL_LEN")
     max_model_len = int(mml_raw) if mml_raw else None
     if max_model_len is None and max_ctx_len is not None:
-        # Doc tokens are capped at max_ctx_len; prompt adds inst/query/template overhead.
+        
         max_model_len = max_ctx_len + 2048
 
-    run_blend_eval_fifo(
+    mode = os.environ.get("REALISTIC_MODE", "fifo").lower()
+    # REALISTIC_MODE -> fifo | comp | 3way | delta_memory | budget.
+
+    recomp_raw = os.environ.get("REALISTIC_RECOMP_RATIO")
+    recomp_ratio = float(recomp_raw) if recomp_raw else None
+
+    common_kwargs = dict(
         dataset_path=dataset_path,
         prefix_prompt=(
             "You will be asked a question after reading several passages."
@@ -492,6 +416,7 @@ def main() -> None:
         s_end=[733, 28748, 16289, 28793],
         suffix_is_query_len=False,
         max_tokens=32,
+        recomp_ratio=recomp_ratio,
         model_name="mistralai/Mistral-7B-Instruct-v0.2",
         gpu_memory_utilization=gpu_memory_utilization,
         max_model_len=max_model_len,
@@ -501,6 +426,80 @@ def main() -> None:
         fifo_max_chunks=fifo_max,
     )
 
+    if mode == "comp":
+        pair_cap = int(os.environ.get("REALISTIC_PAIR_STORE_CAP", "256"))
+        prom_t = int(os.environ.get("REALISTIC_PROMOTION_THRESHOLD", "10"))
+        prom_sync = os.environ.get("REALISTIC_PROMOTE_SYNC", "0") == "1"
+        pair_kind = os.environ.get("REALISTIC_PAIR_STORE_KIND", "full").lower()
+        delta_ratio = float(os.environ.get("REALISTIC_DELTA_TOP_K_RATIO", "0.1"))
+        print(
+            f"[mode=comp] pair_store_cap={pair_cap} "
+            f"promotion_threshold={prom_t} promote_sync={prom_sync} "
+            f"pair_store_kind={pair_kind} delta_top_k_ratio={delta_ratio}"
+        )
+        run_blend_eval_comp(
+            **common_kwargs,
+            pair_store_capacity=pair_cap,
+            pair_store_kind=pair_kind,
+            delta_top_k_ratio=delta_ratio,
+            promotion_threshold=prom_t,
+            promote_sync=prom_sync,
+        )
+    elif mode == "3way":
+        pair_cap = int(os.environ.get("REALISTIC_PAIR_STORE_CAP", "256"))
+        print(f"[mode=3way] pair_store_cap={pair_cap} (FIFO, no promotion threshold)")
+        run_blend_eval_three_way(
+            **common_kwargs,
+            pair_store_capacity=pair_cap,
+        )
+    elif mode == "delta_memory":
+        pair_cap = int(os.environ.get("REALISTIC_PAIR_STORE_CAP", "4096"))
+        prom_t = int(os.environ.get("REALISTIC_PROMOTION_THRESHOLD", "0"))
+        bytes_env = os.environ.get("DELTA_MEMORY_BYTES_BUDGET", "").strip()
+        bytes_budget = int(bytes_env) if bytes_env else None
+        configs_raw = os.environ.get(
+            "DELTA_MEMORY_CONFIGS", "full,delta_r0.50,delta_r0.10"
+        )
+        configs = [
+            _parse_delta_config(tok) for tok in configs_raw.split(",") if tok.strip()
+        ]
+        print(
+            f"[mode=delta_memory] pair_store_cap={pair_cap} "
+            f"promotion_threshold={prom_t} "
+            f"bytes_budget={bytes_budget!r} configs={configs_raw}"
+        )
+        run_delta_memory_eval(
+            **common_kwargs,
+            pair_store_capacity=pair_cap,
+            pair_store_bytes_budget=bytes_budget,
+            promotion_threshold=prom_t,
+            configs=configs,
+        )
+    elif mode == "budget":
+        
+        cap_full = int(os.environ.get("REALISTIC_CAP_FULL", "256"))
+        delta_ratio = float(os.environ.get("REALISTIC_DELTA_TOP_K_RATIO", "0.1"))
+        cap_delta_env = os.environ.get("REALISTIC_CAP_DELTA", "")
+        cap_delta = int(cap_delta_env) if cap_delta_env else None
+        prom_t = int(os.environ.get("REALISTIC_PROMOTION_THRESHOLD", "10"))
+        print(
+            f"[mode=budget] cap_full={cap_full} delta_ratio={delta_ratio} "
+            f"cap_delta={cap_delta} promotion_threshold={prom_t}"
+        )
+        run_popularity_budget_eval(
+            **common_kwargs,
+            cap_full=cap_full,
+            delta_top_k_ratio=delta_ratio,
+            cap_delta=cap_delta,
+            promotion_threshold=prom_t,
+        )
+    elif mode == "fifo":
+        run_blend_eval_fifo(**common_kwargs)
+    else:
+        raise ValueError(
+            f"Unknown REALISTIC_MODE={mode!r}; expected 'fifo', 'comp', '3way', "
+            f"'delta_memory', or 'budget'"
+        )
 
 if __name__ == "__main__":
     main()

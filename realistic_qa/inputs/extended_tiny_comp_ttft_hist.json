@@ -1,0 +1,38 @@
+{
+  "ttft_blend_seconds": [
+    0.0605463981628418,
+    0.01970386505126953
+  ],
+  "ttft_full_seconds": [
+    0.021338701248168945,
+    0.021088600158691406
+  ],
+  "metadata": {
+    "stream_seed": 34,
+    "skip_first": 0,
+    "fifo_kv": {
+      "hits": 2,
+      "misses": 6,
+      "evictions": 0,
+      "entries": 6
+    },
+    "pair_store": {
+      "hits": 0,
+      "misses": 0,
+      "evictions": 0,
+      "entries": 0,
+      "capacity": 256,
+      "kind": "full_joint"
+    },
+    "promotion_worker": {
+      "completed": 0,
+      "errors": 0,
+      "dropped": 0,
+      "pending": 0,
+      "running": false
+    },
+    "promotion_threshold": 10,
+    "dataset": "/CompCache/realistic_qa/inputs/extended_tiny.json",
+    "n_queries": 2
+  }
+}

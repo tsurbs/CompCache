@@ -1,7 +1,5 @@
 from utils import build_qa_prompt, compute_f1, run_blend_eval
 
-# Expect standard_qa/inputs/multihop_rag_s.json: list of
-# {"question", "ctxs": [{"title", "text"}, ...], "answers": ["gold", ...]}
 query_prompt = (
     "\n\nAnswer the question directly based on the given passages."
     " Do NOT repeat the question."
@@ -23,7 +21,7 @@ run_blend_eval(
     s_end=[733, 28748, 16289, 28793],
     suffix_is_query_len=False,
     max_tokens=32,
-    recomp_ratio=0.18,
+    recomp_ratio=0.5,
     fast_attention=True,
     model_name="mistralai/Mistral-7B-Instruct-v0.2",
 )

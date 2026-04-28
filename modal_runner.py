@@ -8,22 +8,20 @@ from pathlib import Path
 
 import modal
 
+# Repo root: cwd with vllm_blend, else /CompCache inside Modal images.
 _HERE = Path(__file__).resolve().parent
-# Modal copies this module to ``/root/modal_runner.py`` for imports; sources live at ``/CompCache/…`` in the image.
+
 _REPO_CONTAINER = Path("/CompCache")
 
-
 def _repo_root() -> Path:
-    """Repo root on the dev machine next to ``modal_runner.py``, or ``/CompCache`` in Modal layers."""
     if (_HERE / "vllm_blend").is_dir():
         return _HERE
     if (_REPO_CONTAINER / "vllm_blend").is_dir():
         return _REPO_CONTAINER
-    # Dataset-builder image: only standard_qa + realistic_qa under /CompCache (no vLLM)
+    
     if (_REPO_CONTAINER / "standard_qa").is_dir():
         return _REPO_CONTAINER
     return _HERE
-
 
 REPO_ROOT = _repo_root()
 _VLLM_SRC = REPO_ROOT / "vllm_blend"
@@ -34,9 +32,8 @@ _REALISTIC_QA_SRC = REPO_ROOT / "realistic_qa"
 _REALISTIC_RUNNERS_SRC = _REALISTIC_QA_SRC / "runners"
 _REALISTIC_INPUTS_SRC = _REALISTIC_QA_SRC / "inputs"
 
-# vLLM compile is very slow and memory intensive, limit number of jobs to avoid OOMs
 _BUILD_MAX_JOBS = os.environ.get("MODAL_BUILD_MAX_JOBS", "4")
-# Blend scripts use paths like standard_qa/inputs/*.json relative to repo root
+
 _CONTAINER_REPO = "/CompCache"
 _CONTAINER_STANDARD_QA = f"{_CONTAINER_REPO}/standard_qa"
 _CONTAINER_RUNNERS = f"{_CONTAINER_STANDARD_QA}/runners"
@@ -49,23 +46,19 @@ REALISTIC_SCRIPT = "blend_realistic.py"
 
 MISTRAL_ID_PREFIX = "mistralai/Mistral"
 
-# 128 GiB RAM, 1 TiB ephemeral disk (Modal uses MiB for both request knobs).
-_MEM_MIB = 128 * 1024
+_MEM_MIB = int(os.environ.get("MODAL_MEM_MIB", str(256 * 1024)))
 _DISK_MIB = 1024 * 1024
 
 _GPU = os.environ.get("MODAL_GPU", "L40S")
 if ":" not in _GPU:
     _GPU = f"{_GPU}:1"
 
-# Lighter defaults for the dataset builder (embeddings only — no vLLM).
-# Still needs GPU for SentenceTransformers / Faiss
 _BUILDER_GPU = os.environ.get("MODAL_BUILDER_GPU", _GPU)
 if ":" not in _BUILDER_GPU:
     _BUILDER_GPU = f"{_BUILDER_GPU}:1"
 _BUILDER_MEM_MIB = int(os.environ.get("MODAL_BUILDER_MEM_MIB", str(64 * 1024)))
 _BUILDER_DISK_MIB = int(os.environ.get("MODAL_BUILDER_DISK_MIB", str(512 * 1024)))
 _BUILDER_CPU = float(os.environ.get("MODAL_BUILDER_CPU", "8"))
-
 
 def _blend_image() -> modal.Image:
     if not _VLLM_SRC.is_dir():
@@ -84,7 +77,7 @@ def _blend_image() -> modal.Image:
         raise FileNotFoundError(f"Missing realistic_qa/inputs: {_REALISTIC_INPUTS_SRC}")
 
     _copy_ignore = (".git", ".venv", "**/__pycache__", "*.pyc", ".DS_Store")
-    # Local cmake/build trees should not bust the image hash or overwrite clean builds.
+    
     _vllm_ignore = [
         *_copy_ignore,
         "build",
@@ -104,9 +97,9 @@ def _blend_image() -> modal.Image:
                 "HF_HOME": "/cache/huggingface",
                 "TRANSFORMERS_CACHE": "/cache/huggingface",
                 "MAX_JOBS": "8",
-                # Line-buffer print() from benchmarks / vLLM in ``modal run`` logs.
+                
                 "PYTHONUNBUFFERED": "1",
-                # PyTorch 2.2.1 + vLLM 0.4.1 CMake fails on autodetected "9.0a"; pin arches.
+                
                 "TORCH_CUDA_ARCH_LIST": "7.5;8.0;8.6;8.9;9.0",
             }
         )
@@ -119,7 +112,7 @@ def _blend_image() -> modal.Image:
             "numpy>=1.26,<2",
             "matplotlib>=3.7,<4",
         )
-        # Layer 1 — only vLLM sources; compile step reuses cache when standard_qa/modal_runner change.
+        
         .add_local_dir(
             _VLLM_SRC,
             remote_path="/CompCache/vllm_blend",
@@ -132,12 +125,12 @@ def _blend_image() -> modal.Image:
             "bash -c 'set -euxo pipefail; echo \"[image] $(date -Is) pip install requirements-cuda\"; python -m pip install -r /CompCache/vllm_blend/requirements-cuda.txt'",
             "bash -c 'set -euxo pipefail; echo \"[image] $(date -Is) pip install numpy pin\"; python -m pip install \"numpy>=1.26,<2\"'",
             f"bash -c 'set -euxo pipefail; export MAX_JOBS={_BUILD_MAX_JOBS}; echo \"[image] $(date -Is) editable vllm build MAX_JOBS=$MAX_JOBS …\"; cd /CompCache/vllm_blend && python -m pip install --no-build-isolation -e .'",
-            # Do not ``import vllm._C`` here: image builders have no GPU driver, so dlopen
-            # fails with ``libcuda.so.1: cannot open shared object file``. Runtime containers
-            # mount the driver and can load the extension.
+            
+            
+            
             "bash -c 'echo \"[image] $(date -Is) vllm editable install finished; skipping _C import until runtime (no libcuda in build)\"'",
         )
-        # Thin layer — full ``standard_qa/`` tree (runners + inputs); does not invalidate vLLM compile.
+        
         .add_local_dir(
             _STANDARD_QA_SRC,
             remote_path="/CompCache/standard_qa",
@@ -152,9 +145,7 @@ def _blend_image() -> modal.Image:
         )
     )
 
-
 def _dataset_builder_image() -> modal.Image:
-    """CUDA + PyTorch + SentenceTransformers + Faiss (no vLLM) for ``build_extended_dataset.py``."""
     if not _STANDARD_QA_SRC.is_dir():
         raise FileNotFoundError(f"Missing standard_qa: {_STANDARD_QA_SRC}")
     if not _INPUTS_SRC.is_dir():
@@ -199,9 +190,6 @@ def _dataset_builder_image() -> modal.Image:
         )
     )
 
-
-# Modal imports this module inside every worker. Dataset-builder containers have no
-# ``/CompCache/vllm_blend``, so ``_blend_image()`` must not run there unguarded.
 _dataset_builder_image_singleton = _dataset_builder_image()
 try:
     _blend_image_singleton = _blend_image()
@@ -210,12 +198,18 @@ except FileNotFoundError:
 
 app = modal.App("compcache-blend", image=_blend_image_singleton)
 
+_ARTIFACTS_VOLUME = modal.Volume.from_name(
+    "compcache-artifacts", create_if_missing=True,
+)
+_ARTIFACTS_VOLUME_MOUNT = "/artifacts"
+
 _FN = dict(
     gpu=_GPU,
     memory=_MEM_MIB,
     ephemeral_disk=_DISK_MIB,
     cpu=16.0,
     timeout=86400,
+    volumes={_ARTIFACTS_VOLUME_MOUNT: _ARTIFACTS_VOLUME},
 )
 
 _FN_BUILDER = dict(
@@ -226,21 +220,17 @@ _FN_BUILDER = dict(
     timeout=86400,
 )
 
-
-# Fixed name so Modal’s local and container imports resolve the same ``Secret`` graph node.
 _DEFAULT_COMPCACHE_SECRET = "compcache-dotenv"
 
 _WORKSPACE_SECRETS: list[modal.Secret] = [
     modal.Secret.from_name(_DEFAULT_COMPCACHE_SECRET),
 ]
 
-
 def _fn_with_workspace_secrets(fn_kwargs: dict) -> dict:
     out = dict(fn_kwargs)
     prev = list(out.get("secrets") or [])
     out["secrets"] = prev + _WORKSPACE_SECRETS
     return out
-
 
 def _mistral_only(script: Path) -> None:
     text = script.read_text(encoding="utf-8")
@@ -253,12 +243,9 @@ def _mistral_only(script: Path) -> None:
         if forbidden in lower:
             raise ValueError(f"{script.name} references a non-Mistral model ({forbidden})")
 
-
 def _maybe_pin_cuda_visible_device0() -> None:
-    """Modal usually sets CUDA_VISIBLE_DEVICES; only override when explicitly asked."""
     if os.environ.get("MODAL_PIN_CUDA_0") == "1":
         os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-
 
 def _sys_path_prepend_for_vllm_and_runners() -> None:
     for p in (
@@ -269,9 +256,7 @@ def _sys_path_prepend_for_vllm_and_runners() -> None:
         if p not in sys.path:
             sys.path.insert(0, p)
 
-
 def _invoke_blend_realistic_main() -> None:
-    """Run eval in-process so CUDA initializes once (avoids subprocess + bad GPU state quirks)."""
     prev = os.getcwd()
     _sys_path_prepend_for_vllm_and_runners()
     try:
@@ -281,19 +266,36 @@ def _invoke_blend_realistic_main() -> None:
     finally:
         os.chdir(prev)
 
-
 def _run_blend_script(path: Path) -> None:
-    """Run one benchmark with unbuffered Python so logs stream to Modal."""
     print(f"[modal] running {path.name} …", flush=True)
-    subprocess.run(
-        [sys.executable, "-u", str(path)],
-        cwd=_CONTAINER_REPO,
-        check=True,
-    )
+    try:
+        subprocess.run(
+            [sys.executable, "-u", str(path)],
+            cwd=_CONTAINER_REPO,
+            check=True,
+        )
+    finally:
+        try:
+            _persist_artifacts_to_volume()
+        except Exception as e:  
+            print(f"[modal] volume persist failed after {path.name}: {e!r}", flush=True)
 
+def _persist_artifacts_to_volume() -> int:
+    artifacts = _collect_result_jsons()
+    if not artifacts:
+        return 0
+    base = Path(_ARTIFACTS_VOLUME_MOUNT)
+    n = 0
+    for rel, data in artifacts.items():
+        dest = base / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        n += 1
+    _ARTIFACTS_VOLUME.commit()
+    print(f"[modal] persisted {n} artifact(s) to volume '{_ARTIFACTS_VOLUME.name if hasattr(_ARTIFACTS_VOLUME, 'name') else 'compcache-artifacts'}'", flush=True)
+    return n
 
 def _collect_result_jsons() -> dict[str, bytes]:
-    """Gather all analysis JSON files produced during the run."""
     results = {}
     for inputs_dir, prefix in (
         (Path(_CONTAINER_INPUTS), "standard_qa/inputs/"),
@@ -301,12 +303,38 @@ def _collect_result_jsons() -> dict[str, bytes]:
     ):
         for pattern in (
             "*_coretrieval.json",
+            "*_comp_coretrieval.json",
+            "*_3way*_coretrieval.json",
             "*_scores.json",
+            "*_comp_scores.json",
+            "*_3way*_scores.json",
             "*_synthetic_zipf.json",
             "*_ttft_warmup.json",
             "*_ttft_warmup.png",
             "*_ttft_hist.json",
             "*_ttft_hist.png",
+            "*_3way*_ttft_warmup.json",
+            "*_3way*_ttft_warmup.png",
+            "*_3way*_ttft_hist.json",
+            "*_3way*_ttft_hist.png",
+            "*_recomp_sweep*_scores.json",
+            
+            "*_comp_delta_coretrieval.json",
+            "*_comp_delta_scores.json",
+            "*_comp_delta_ttft_warmup.json",
+            "*_comp_delta_ttft_warmup.png",
+            "*_comp_delta_ttft_hist.json",
+            "*_comp_delta_ttft_hist.png",
+            "*_comp_delta_vs_full.png",
+            
+            "*_delta_memory_scores.json",
+            "*_delta_memory_timeseries.png",
+            "*_delta_memory_tradeoff.png",
+            "*_delta_memory_ttft.png",
+            
+            "*_budget_scores.json",
+            "*_budget_main.png",
+            "*_budget_ttft_hist.png",
         ):
             for p in sorted(inputs_dir.glob(pattern)):
                 rel = prefix + p.name
@@ -314,15 +342,67 @@ def _collect_result_jsons() -> dict[str, bytes]:
                 print(f"[modal] collected {rel} ({len(results[rel])} bytes)", flush=True)
     return results
 
-
 def _save_results_locally(artifacts: dict[str, bytes]) -> None:
-    """Write downloaded result JSONs under ``standard_qa/inputs/`` or ``realistic_qa/inputs/``."""
     for name, data in artifacts.items():
         dest = REPO_ROOT / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
         print(f"[local] saved {dest}")
 
+def _read_artifacts_from_volume(prefix: str = "") -> dict[str, bytes]:
+    base = Path(_ARTIFACTS_VOLUME_MOUNT)
+    out: dict[str, bytes] = {}
+    if not base.exists():
+        print(f"[modal] volume mount {base} does not exist", flush=True)
+        return out
+    
+    try:
+        _ARTIFACTS_VOLUME.reload()
+    except Exception as e:  
+        print(f"[modal] volume reload failed: {e!r}", flush=True)
+    for p in sorted(base.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = str(p.relative_to(base))
+        if prefix and not rel.startswith(prefix):
+            continue
+        out[rel] = p.read_bytes()
+    print(
+        f"[modal] read {len(out)} file(s) from volume "
+        f"(prefix={prefix!r})",
+        flush=True,
+    )
+    return out
+
+_FN_VOLUME_CPU = dict(
+    cpu=2.0,
+    memory=4096,
+    timeout=3600,
+    volumes={_ARTIFACTS_VOLUME_MOUNT: _ARTIFACTS_VOLUME},
+)
+
+@app.function(**_fn_with_workspace_secrets(_FN_VOLUME_CPU))
+def pull_artifacts_from_volume(prefix: str = "") -> dict[str, bytes]:
+    return _read_artifacts_from_volume(prefix=prefix)
+
+@app.function(**_fn_with_workspace_secrets(_FN_VOLUME_CPU))
+def list_artifacts_in_volume(prefix: str = "") -> list[tuple[str, int]]:
+    base = Path(_ARTIFACTS_VOLUME_MOUNT)
+    if not base.exists():
+        return []
+    try:
+        _ARTIFACTS_VOLUME.reload()
+    except Exception:
+        pass
+    rows: list[tuple[str, int]] = []
+    for p in sorted(base.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = str(p.relative_to(base))
+        if prefix and not rel.startswith(prefix):
+            continue
+        rows.append((rel, p.stat().st_size))
+    return rows
 
 def _collect_builder_outputs(mode: str, out: str, out_samsum: str) -> dict[str, bytes]:
     results: dict[str, bytes] = {}
@@ -339,7 +419,6 @@ def _collect_builder_outputs(mode: str, out: str, out_samsum: str) -> dict[str, 
         else:
             print(f"[modal] warning: missing output {p}", flush=True)
     return results
-
 
 @app.function(
     **_fn_with_workspace_secrets(
@@ -362,7 +441,6 @@ def run_build_extended_dataset(
     samsum_n: int = 1500,
     splitter_model: str = "mistralai/Mistral-7B-Instruct-v0.2",
 ) -> dict[str, bytes]:
-    """GPU-accelerated extended dataset build (SentenceTransformers + Faiss)."""
     _maybe_pin_cuda_visible_device0()
     script = Path(_CONTAINER_REPO) / "realistic_qa" / "scripts" / "build_extended_dataset.py"
     if not script.is_file():
@@ -407,11 +485,14 @@ def run_build_extended_dataset(
     subprocess.run(cmd, cwd=_CONTAINER_REPO, check=True, env=os.environ.copy())
     return _collect_builder_outputs(mode, out, out_samsum)
 
-
 @app.function(**_fn_with_workspace_secrets(_FN))
 def run_blend(script: str) -> dict[str, bytes]:
     _maybe_pin_cuda_visible_device0()
-    os.environ["PYTHONPATH"] = f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}"
+    alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = alloc
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
 
     ex_dir = Path(_CONTAINER_RUNNERS)
     path = ex_dir / script
@@ -424,10 +505,8 @@ def run_blend(script: str) -> dict[str, bytes]:
     _run_blend_script(path)
     return _collect_result_jsons()
 
-
 def _realistic_py_path() -> Path:
     return Path(_CONTAINER_REALISTIC_RUNNERS) / REALISTIC_SCRIPT
-
 
 @app.function(**_fn_with_workspace_secrets(_FN))
 def run_realistic_blend(
@@ -437,15 +516,13 @@ def run_realistic_blend(
     max_ctx_len: int = 8192,
     max_model_len: int = 0,
     gpu_memory_utilization: float = 0.45,
+    mode: str = "fifo",
+    pair_store_capacity: int = 256,
+    pair_store_kind: str = "full",
+    delta_top_k_ratio: float = 0.1,
+    promotion_threshold: int = 10,
+    promote_sync: bool = False,
 ) -> dict[str, bytes]:
-    """FIFO CacheBlend evaluation on a realistic_qa JSON (see ``blend_realistic.py``).
-
-    ``max_ctx_len`` trims passage chunks (middle-out) so long multi-hop prompts fit
-    on a ~48GB GPU; use 0 to disable. ``max_model_len`` caps vLLM context (scheduler
-    + KV); 0 lets ``blend_realistic`` derive ``max_ctx_len + 512`` when
-    ``max_ctx_len`` is set, else Hugging Face max. Lower ``gpu_memory_utilization``
-    leaves VRAM for FIFO-cloned KV tensors alongside vLLM's pool.
-    """
     _maybe_pin_cuda_visible_device0()
     alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = alloc
@@ -456,6 +533,12 @@ def run_realistic_blend(
     os.environ["REALISTIC_FIFO_MAX"] = str(fifo_max)
     os.environ["REALISTIC_SKIP_FIRST"] = str(skip_first)
     os.environ["REALISTIC_GPU_MEMORY_UTILIZATION"] = str(gpu_memory_utilization)
+    os.environ["REALISTIC_MODE"] = mode
+    os.environ["REALISTIC_PAIR_STORE_CAP"] = str(pair_store_capacity)
+    os.environ["REALISTIC_PAIR_STORE_KIND"] = pair_store_kind
+    os.environ["REALISTIC_DELTA_TOP_K_RATIO"] = str(delta_top_k_ratio)
+    os.environ["REALISTIC_PROMOTION_THRESHOLD"] = str(promotion_threshold)
+    os.environ["REALISTIC_PROMOTE_SYNC"] = "1" if promote_sync else "0"
     if max_ctx_len > 0:
         os.environ["REALISTIC_MAX_CTX_LEN"] = str(max_ctx_len)
     else:
@@ -471,33 +554,181 @@ def run_realistic_blend(
     _mistral_only(path)
 
     print(
-        f"[modal] realistic QA: dataset={dataset} fifo_max={fifo_max} "
+        f"[modal] realistic QA: dataset={dataset} mode={mode} fifo_max={fifo_max} "
         f"skip_first={skip_first} max_ctx_len={max_ctx_len} "
         f"max_model_len={max_model_len or '(auto or HF)'} "
-        f"gpu_memory_utilization={gpu_memory_utilization}",
+        f"gpu_memory_utilization={gpu_memory_utilization} "
+        f"pair_store_cap={pair_store_capacity} pair_store_kind={pair_store_kind} "
+        f"delta_top_k_ratio={delta_top_k_ratio} "
+        f"promotion_threshold={promotion_threshold} "
+        f"promote_sync={promote_sync}",
         flush=True,
     )
-    _invoke_blend_realistic_main()
+    try:
+        _invoke_blend_realistic_main()
+    finally:
+        try:
+            _persist_artifacts_to_volume()
+        except Exception as e:  
+            print(f"[modal] volume persist failed after run_realistic_blend: {e!r}", flush=True)
     return _collect_result_jsons()
-
 
 @app.function(**_fn_with_workspace_secrets(_FN))
 def run_all_blends() -> dict[str, bytes]:
     _maybe_pin_cuda_visible_device0()
-    os.environ["PYTHONPATH"] = f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}"
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
 
     ex_dir = Path(_CONTAINER_RUNNERS)
-    paths = sorted(ex_dir.glob(BLEND_PATTERN))
+    paths = sorted(
+        p for p in ex_dir.glob(BLEND_PATTERN)
+        if "_comp.py" not in p.name
+        and "_comp_delta.py" not in p.name
+        and "_3way.py" not in p.name
+        and "_sweep.py" not in p.name
+    )
     print(f"[modal] run_all_blends: {len(paths)} script(s)", flush=True)
     for path in paths:
         _mistral_only(path)
         _run_blend_script(path)
     return _collect_result_jsons()
 
+@app.function(**_fn_with_workspace_secrets(_FN))
+def run_all_blends_comp() -> dict[str, bytes]:
+    _maybe_pin_cuda_visible_device0()
+    alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = alloc
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
+
+    ex_dir = Path(_CONTAINER_RUNNERS)
+    paths = sorted(ex_dir.glob("blend_*_comp.py"))
+    print(f"[modal] run_all_blends_comp: {len(paths)} script(s)", flush=True)
+    for path in paths:
+        _mistral_only(path)
+        _run_blend_script(path)
+    return _collect_result_jsons()
+
+@app.local_entrypoint()
+def standard_comp():
+    with modal.enable_output():
+        artifacts = run_all_blends_comp.remote()
+    _save_results_locally(artifacts)
+
+@app.function(**_fn_with_workspace_secrets(_FN))
+def run_all_blends_comp_delta(
+    delta_top_k_ratio: float | None = None,
+    artifact_suffix: str | None = None,
+) -> dict[str, bytes]:
+    _maybe_pin_cuda_visible_device0()
+    alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = alloc
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
+    if delta_top_k_ratio is not None:
+        os.environ["STANDARD_COMP_DELTA_TOP_K_RATIO"] = str(delta_top_k_ratio)
+    if artifact_suffix:
+        os.environ["STANDARD_COMP_ARTIFACT_SUFFIX"] = artifact_suffix
+
+    ex_dir = Path(_CONTAINER_RUNNERS)
+    paths = sorted(ex_dir.glob("blend_*_comp_delta.py"))
+    print(
+        f"[modal] run_all_blends_comp_delta: {len(paths)} script(s) "
+        f"top_k_ratio={delta_top_k_ratio} suffix={artifact_suffix!r}",
+        flush=True,
+    )
+    for path in paths:
+        _mistral_only(path)
+        _run_blend_script(path)
+    return _collect_result_jsons()
+
+@app.local_entrypoint()
+def standard_comp_delta(
+    delta_top_k_ratio: float | None = None,
+    artifact_suffix: str | None = None,
+):
+    with modal.enable_output():
+        artifacts = run_all_blends_comp_delta.remote(
+            delta_top_k_ratio=delta_top_k_ratio,
+            artifact_suffix=artifact_suffix,
+        )
+    _save_results_locally(artifacts)
+
+@app.function(**_fn_with_workspace_secrets(_FN))
+def run_all_blends_3way(
+    recomp_ratio: float | None = None,
+    pair_recomp_ratio: float | None = None,
+    output_tag: str = "",
+) -> dict[str, bytes]:
+    _maybe_pin_cuda_visible_device0()
+    alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = alloc
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
+    if recomp_ratio is not None:
+        os.environ["STANDARD_COMP_RECOMP_RATIO"] = str(recomp_ratio)
+    if pair_recomp_ratio is not None:
+        os.environ["STANDARD_COMP_PAIR_RECOMP_RATIO"] = str(pair_recomp_ratio)
+    if output_tag:
+        os.environ["THREE_WAY_OUTPUT_TAG"] = output_tag
+
+    ex_dir = Path(_CONTAINER_RUNNERS)
+    paths = sorted(ex_dir.glob("blend_*_3way.py"))
+    print(
+        f"[modal] run_all_blends_3way: {len(paths)} script(s) "
+        f"recomp={recomp_ratio} pair_recomp={pair_recomp_ratio} tag={output_tag!r}",
+        flush=True,
+    )
+    for path in paths:
+        _mistral_only(path)
+        _run_blend_script(path)
+    return _collect_result_jsons()
+
+@app.local_entrypoint()
+def standard_3way(
+    recomp_ratio: float | None = None,
+    pair_recomp_ratio: float | None = None,
+    output_tag: str = "",
+):
+    with modal.enable_output():
+        artifacts = run_all_blends_3way.remote(
+            recomp_ratio=recomp_ratio,
+            pair_recomp_ratio=pair_recomp_ratio,
+            output_tag=output_tag,
+        )
+    _save_results_locally(artifacts)
+
+@app.function(**_fn_with_workspace_secrets(_FN))
+def run_recomp_sweep(output_tag: str = "") -> dict[str, bytes]:
+    _maybe_pin_cuda_visible_device0()
+    alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = alloc
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
+    if output_tag:
+        os.environ["RECOMP_SWEEP_OUTPUT_TAG"] = output_tag
+
+    path = Path(_CONTAINER_RUNNERS) / "blend_hotpotqa_sweep.py"
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    _mistral_only(path)
+    print(f"[modal] run_recomp_sweep: {path.name} tag={output_tag!r}", flush=True)
+    _run_blend_script(path)
+    return _collect_result_jsons()
+
+@app.local_entrypoint()
+def recomp_sweep(output_tag: str = ""):
+    with modal.enable_output():
+        artifacts = run_recomp_sweep.remote(output_tag=output_tag)
+    _save_results_locally(artifacts)
 
 @app.local_entrypoint()
 def main(script: str | None = None, realistic: bool = False):
-    """Default entry: all standard blends, or one ``blend_*.py``, or realistic if ``--realistic``."""
     with modal.enable_output():
         if realistic:
             artifacts = run_realistic_blend.remote()
@@ -507,7 +738,6 @@ def main(script: str | None = None, realistic: bool = False):
             artifacts = run_all_blends.remote()
     _save_results_locally(artifacts)
 
-
 @app.local_entrypoint()
 def realistic(
     dataset: str = "realistic_qa/inputs/extended_tiny.json",
@@ -516,21 +746,13 @@ def realistic(
     max_ctx_len: int = 8192,
     max_model_len: int = 0,
     gpu_memory_utilization: float = 0.45,
+    mode: str = "fifo",
+    pair_store_capacity: int = 256,
+    pair_store_kind: str = "full",
+    delta_top_k_ratio: float = 0.1,
+    promotion_threshold: int = 10,
+    promote_sync: bool = False,
 ):
-    """Run extended / FIFO CacheBlend on Modal.
-
-    Default is the committed smoke fixture. For the full 6K benchmark, build locally then::
-
-        modal run modal_runner.py::realistic --dataset realistic_qa/inputs/extended_cacheblend.json
-
-    On ~48GB GPUs, keep default ``max_ctx_len`` (8192) or lower; use ``--max-ctx-len 0``
-    only if you have enough VRAM for full Mistral-32k-style profiles.
-
-    Examples::
-
-        modal run modal_runner.py::realistic
-        modal run modal_runner.py::realistic --skip-first 1000
-    """
     with modal.enable_output():
         artifacts = run_realistic_blend.remote(
             dataset=dataset,
@@ -539,9 +761,180 @@ def realistic(
             max_ctx_len=max_ctx_len,
             max_model_len=max_model_len,
             gpu_memory_utilization=gpu_memory_utilization,
+            mode=mode,
+            pair_store_capacity=pair_store_capacity,
+            pair_store_kind=pair_store_kind,
+            delta_top_k_ratio=delta_top_k_ratio,
+            promotion_threshold=promotion_threshold,
+            promote_sync=promote_sync,
         )
     _save_results_locally(artifacts)
 
+@app.local_entrypoint()
+def delta_memory(
+    dataset: str = "realistic_qa/inputs/extended_cacheblend.json",
+    
+    
+    pair_store_capacity: int = 4096,
+    
+    
+    
+    
+    
+    bytes_budget_gib: float = 2.0,
+    
+    
+    
+    
+    promotion_threshold: int = 0,
+    
+    
+    
+    
+    recomp_ratio: float = 0.18,
+    configs: str = "full,delta_r0.50,delta_r0.10",
+    skip_first: int = 0,
+    max_ctx_len: int = 8192,
+    max_model_len: int = 0,
+    
+    
+    
+    
+    
+    
+    
+    gpu_memory_utilization: float = 0.38,
+):
+    extra_env = {"DELTA_MEMORY_CONFIGS": configs}
+    if bytes_budget_gib > 0:
+        extra_env["DELTA_MEMORY_BYTES_BUDGET"] = str(
+            int(bytes_budget_gib * (1024 ** 3))
+        )
+    if recomp_ratio > 0:
+        extra_env["REALISTIC_RECOMP_RATIO"] = f"{recomp_ratio:g}"
+    with modal.enable_output():
+        artifacts = _run_realistic_with_extra_env.remote(
+            dataset=dataset,
+            mode="delta_memory",
+            pair_store_capacity=pair_store_capacity,
+            promotion_threshold=promotion_threshold,
+            skip_first=skip_first,
+            max_ctx_len=max_ctx_len,
+            max_model_len=max_model_len,
+            gpu_memory_utilization=gpu_memory_utilization,
+            extra_env=extra_env,
+        )
+    _save_results_locally(artifacts)
+
+@app.local_entrypoint()
+def budget(
+    dataset: str = "realistic_qa/inputs/extended_cacheblend.json",
+    cap_full: int = 256,
+    delta_top_k_ratio: float = 0.10,
+    cap_delta: int = 0,
+    promotion_threshold: int = 10,
+    skip_first: int = 0,
+    max_ctx_len: int = 8192,
+    max_model_len: int = 0,
+    gpu_memory_utilization: float = 0.45,
+):
+    with modal.enable_output():
+        artifacts = _run_realistic_with_extra_env.remote(
+            dataset=dataset,
+            mode="budget",
+            skip_first=skip_first,
+            max_ctx_len=max_ctx_len,
+            max_model_len=max_model_len,
+            gpu_memory_utilization=gpu_memory_utilization,
+            extra_env={
+                "REALISTIC_CAP_FULL": str(cap_full),
+                "REALISTIC_DELTA_TOP_K_RATIO": str(delta_top_k_ratio),
+                "REALISTIC_CAP_DELTA": str(cap_delta) if cap_delta > 0 else "",
+                "REALISTIC_PROMOTION_THRESHOLD": str(promotion_threshold),
+            },
+        )
+    _save_results_locally(artifacts)
+
+@app.function(**_fn_with_workspace_secrets(_FN))
+def _run_realistic_with_extra_env(
+    dataset: str,
+    mode: str,
+    *,
+    pair_store_capacity: int = 256,
+    promotion_threshold: int = 10,
+    skip_first: int = 0,
+    max_ctx_len: int = 8192,
+    max_model_len: int = 0,
+    gpu_memory_utilization: float = 0.45,
+    extra_env: dict | None = None,
+) -> dict[str, bytes]:
+    _maybe_pin_cuda_visible_device0()
+    alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = alloc
+    os.environ["PYTHONPATH"] = (
+        f"/CompCache/vllm_blend:{_CONTAINER_RUNNERS}:{_CONTAINER_REALISTIC_RUNNERS}"
+    )
+    os.environ["REALISTIC_DATASET"] = dataset
+    os.environ["REALISTIC_SKIP_FIRST"] = str(skip_first)
+    os.environ["REALISTIC_GPU_MEMORY_UTILIZATION"] = str(gpu_memory_utilization)
+    os.environ["REALISTIC_MODE"] = mode
+    os.environ["REALISTIC_PAIR_STORE_CAP"] = str(pair_store_capacity)
+    os.environ["REALISTIC_PROMOTION_THRESHOLD"] = str(promotion_threshold)
+    if max_ctx_len > 0:
+        os.environ["REALISTIC_MAX_CTX_LEN"] = str(max_ctx_len)
+    else:
+        os.environ.pop("REALISTIC_MAX_CTX_LEN", None)
+    if max_model_len > 0:
+        os.environ["REALISTIC_MAX_MODEL_LEN"] = str(max_model_len)
+    else:
+        os.environ.pop("REALISTIC_MAX_MODEL_LEN", None)
+    for k, v in (extra_env or {}).items():
+        if v == "":
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+    path = _realistic_py_path()
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    _mistral_only(path)
+    print(
+        f"[modal] {mode}: dataset={dataset} "
+        f"extra_env={sorted((extra_env or {}).items())}",
+        flush=True,
+    )
+    try:
+        _invoke_blend_realistic_main()
+    finally:
+        try:
+            _persist_artifacts_to_volume()
+        except Exception as e:  
+            print(f"[modal] volume persist failed after {mode}: {e!r}", flush=True)
+    return _collect_result_jsons()
+
+@app.local_entrypoint()
+def pull_artifacts(prefix: str = ""):
+    with modal.enable_output():
+        artifacts = pull_artifacts_from_volume.remote(prefix=prefix)
+    if not artifacts:
+        print(
+            f"[local] no artifacts found on volume "
+            f"(prefix={prefix!r})"
+        )
+        return
+    _save_results_locally(artifacts)
+
+@app.local_entrypoint()
+def list_artifacts(prefix: str = ""):
+    with modal.enable_output():
+        rows = list_artifacts_in_volume.remote(prefix=prefix)
+    if not rows:
+        print(f"[local] volume empty (prefix={prefix!r})")
+        return
+    total = sum(sz for _, sz in rows)
+    for rel, sz in rows:
+        print(f"  {sz:>12,d}  {rel}")
+    print(f"[local] {len(rows)} file(s), {total:,} bytes total")
 
 @app.local_entrypoint()
 def build_dataset(
@@ -560,15 +953,6 @@ def build_dataset(
     samsum_n: int = 1500,
     splitter_model: str = "mistralai/Mistral-7B-Instruct-v0.2",
 ):
-    """Run ``realistic_qa/scripts/build_extended_dataset.py`` on a GPU worker (downloads land in image HF cache).
-
-    Uses secrets from the ``compcache-dotenv`` Modal secret (see module docstring).
-
-    Examples::
-
-        modal run modal_runner.py::build_dataset
-        modal run modal_runner.py::build_dataset --mode both --n-per-set 50
-    """
     with modal.enable_output():
         artifacts = run_build_extended_dataset.remote(
             mode=mode,

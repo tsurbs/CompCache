@@ -1,0 +1,27 @@
+{
+  "query_index": [
+    0,
+    1
+  ],
+  "ttft_blend_seconds": [
+    0.0605463981628418,
+    0.01970386505126953
+  ],
+  "ttft_full_seconds": [
+    0.021338701248168945,
+    0.021088600158691406
+  ],
+  "metadata": {
+    "dataset": "/CompCache/realistic_qa/inputs/extended_tiny.json",
+    "stream_seed": 34,
+    "skip_first": 0,
+    "fifo_kv": {
+      "hits": 2,
+      "misses": 6,
+      "evictions": 0,
+      "entries": 6
+    },
+    "roll_window": 25,
+    "cached_label": "CompCache (composition-aware)"
+  }
+}

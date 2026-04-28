@@ -22,3 +22,17 @@ Breaking this down, we'll need the following components to mimic the extended da
    1. Feed queries + precomputed context in random (seed 34) order
    2. Cache as much as possible per the CacheBlend protocol, evict with FIFO
 5. Create the modal hookup in `modal_runner.py`
+
+## CompCache (composition-aware) mode
+
+Same runner as FIFO, but with pair promotion and joint KV storage (`run_blend_eval_comp` in `realistic_qa/runners/blend_realistic.py`).
+
+Example (tiny dataset, after installing realistic QA + vLLM deps):
+
+```bash
+export REALISTIC_MODE=comp
+export REALISTIC_DATASET=realistic_qa/inputs/extended_tiny.json
+python realistic_qa/runners/blend_realistic.py
+```
+
+Outputs next to the dataset include `{stem}_comp_scores.json`, `{stem}_comp_coretrieval.json`, `{stem}_comp_ttft_warmup.json`, and `{stem}_comp_ttft_hist.json`. Optional env: `REALISTIC_PAIR_STORE_CAP`, `REALISTIC_PROMOTION_THRESHOLD`, `REALISTIC_PROMOTE_SYNC=1`, `REALISTIC_TTFT_ROLL_WINDOW`.

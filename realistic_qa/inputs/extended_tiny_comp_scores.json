@@ -1,0 +1,65 @@
+{
+  "metric_name": "F1",
+  "F1_blend": [
+    0.33333333333333337,
+    0.0
+  ],
+  "F1_full": [
+    0.2857142857142857,
+    0.25
+  ],
+  "mean_F1_blend": 0.16666666666666669,
+  "mean_F1_full": 0.26785714285714285,
+  "ttft_blend": [
+    0.0605463981628418,
+    0.01970386505126953
+  ],
+  "ttft_full": [
+    0.021338701248168945,
+    0.021088600158691406
+  ],
+  "per_query_stats": [
+    {
+      "pair_hits": 0,
+      "pair_misses": 0,
+      "individual_hits": 0,
+      "individual_misses": 4,
+      "promotions_enqueued": 0,
+      "matched_pairs": []
+    },
+    {
+      "pair_hits": 0,
+      "pair_misses": 0,
+      "individual_hits": 2,
+      "individual_misses": 2,
+      "promotions_enqueued": 0,
+      "matched_pairs": []
+    }
+  ],
+  "fifo_kv": {
+    "hits": 2,
+    "misses": 6,
+    "evictions": 0,
+    "entries": 6
+  },
+  "pair_store": {
+    "hits": 0,
+    "misses": 0,
+    "evictions": 0,
+    "entries": 0,
+    "capacity": 256,
+    "kind": "full_joint"
+  },
+  "promotion_worker": {
+    "completed": 0,
+    "errors": 0,
+    "dropped": 0,
+    "pending": 0,
+    "running": false
+  },
+  "n_queries": 2,
+  "dataset": "/CompCache/realistic_qa/inputs/extended_tiny.json",
+  "stream_seed": 34,
+  "skip_first": 0,
+  "promotion_threshold": 10
+}

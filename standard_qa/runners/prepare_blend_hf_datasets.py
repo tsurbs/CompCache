@@ -1,11 +1,3 @@
-"""Build `standard_qa/inputs/hotpotqa_s.json` and `multihop_rag_s.json` for blend eval.
-
-Requires: pip install datasets
-
-Usage (from repo root):
-  .venv_hf/bin/python standard_qa/runners/prepare_blend_hf_datasets.py
-  .venv_hf/bin/python standard_qa/runners/prepare_blend_hf_datasets.py --max-samples 500
-"""
 
 from __future__ import annotations
 
@@ -15,10 +7,8 @@ from pathlib import Path
 
 from datasets import load_dataset
 
-
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
-
 
 def hotpot_to_blend(row: dict) -> dict:
     titles = row["context"]["title"]
@@ -33,7 +23,6 @@ def hotpot_to_blend(row: dict) -> dict:
         "answers": [row["answer"]],
     }
 
-
 def multihop_rag_to_blend(row: dict) -> dict:
     ctxs = []
     for ev in row.get("evidence_list") or []:
@@ -47,7 +36,6 @@ def multihop_rag_to_blend(row: dict) -> dict:
         "ctxs": ctxs,
         "answers": [row["answer"]],
     }
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -96,7 +84,6 @@ def main() -> None:
     with open(mhr_path, "w", encoding="utf-8") as f:
         json.dump(mhr_records, f, ensure_ascii=False)
     print(f"Wrote {len(mhr_records)} examples -> {mhr_path}")
-
 
 if __name__ == "__main__":
     main()
